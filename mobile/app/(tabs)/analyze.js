@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, ScrollView, Pressable } from 'react-native';
+import { View, Text, ScrollView, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
@@ -53,11 +53,25 @@ export default function AnalyzeScreen() {
 
       const asset = picked.assets[0];
       const form = new FormData();
-      form.append('file', {
-        uri: asset.uri,
-        name: asset.name,
-        type: asset.mimeType ?? 'application/octet-stream',
-      });
+
+      // FormData takes a different shape on each platform, and getting this
+      // wrong fails silently: web stringifies an unrecognized object to
+      // "[object Object]", so the server receives a text field named "file"
+      // and reports that no file was attached.
+      if (Platform.OS === 'web') {
+        // DocumentPicker hands back a real File on web. Older pickers only set
+        // uri, so fall back to fetching the blob it points at.
+        const blob = asset.file ?? await (await fetch(asset.uri)).blob();
+        form.append('file', blob, asset.name);
+      } else {
+        // React Native's FormData understands this {uri, name, type} shape.
+        form.append('file', {
+          uri: asset.uri,
+          name: asset.name,
+          type: asset.mimeType ?? 'application/octet-stream',
+        });
+      }
+
       form.append('title', asset.name);
 
       setBusy(true);
