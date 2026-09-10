@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "HiveFit",
+    "slug": "hivefit",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "hivefit",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": { "backgroundColor": "#F5A623", "resizeMode": "contain" },
+    "ios": { "supportsTablet": true, "bundleIdentifier": "app.hivefit.mobile" },
+    "android": { "package": "app.hivefit.mobile" },
+    "web": { "bundler": "metro", "output": "single" },
+    "plugins": ["expo-router", "expo-secure-store"],
+    "extra": {
+      "apiBaseUrl": "http://localhost:4000/api"
+    }
+  }
+}
