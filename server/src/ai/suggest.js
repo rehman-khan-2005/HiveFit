@@ -9,7 +9,7 @@
 // rather than left to a model's discretion — the model never sees a code path
 // that lets it write an unsupported term into a bullet.
 
-import { preprocess } from '../nlp/tokenize.js';
+import { stemSet, termStems, coveredBy } from '../nlp/evidence.js';
 
 const WEAK_OPENERS = [
   'responsible for', 'worked on', 'helped with', 'assisted with',
@@ -19,25 +19,59 @@ const WEAK_OPENERS = [
 const HAS_METRIC = /\d/;
 
 /**
- * Decide, for each target term, whether the bullet already evidences it.
- * @returns {{evidenced: string[], unsupported: string[]}}
+ * Decide, for each target term, what evidence the resume offers for it.
+ *
+ * Evidence comes in tiers, because "does this person have the skill" and "does
+ * it belong in this particular bullet" are different questions:
+ *
+ *   bullet   the bullet itself demonstrates it — safe to emphasize
+ *   entry    the project/job header declares the stack ("Ease-On | React,
+ *            Node.js") — that work genuinely used it, so it belongs here
+ *   resume   listed under Skills elsewhere — they have it, but writing it into
+ *            unrelated work would misrepresent where it was used, so we ask
+ *   none     nothing anywhere — we ask, and never write it
+ *
+ * Without the tiers a resume whose Skills line reads "Python" would still be
+ * asked "have you actually worked with Python?", which is both wrong and
+ * corrosive to the feature's credibility.
+ *
+ * @param {string}   bulletText
+ * @param {string[]} targetTerms
+ * @param {object}   [context] { entryTech: string[], skills: string[] }
+ * @returns {{evidenced: string[], fromEntry: string[], fromResume: string[], unsupported: string[]}}
  */
-export function classifyTerms(bulletText, targetTerms) {
-  const { tokens } = preprocess(bulletText);
-  const present = new Set(tokens);
+export function classifyTerms(bulletText, targetTerms, context = {}) {
+  const inBullet = stemSet(bulletText);
+  const inEntry = stemSet([context.entryTitle ?? '', ...(context.entryTech ?? [])].join(' '));
+  const inResume = stemSet((context.skills ?? []).join(' '));
 
   const evidenced = [];
+  const fromEntry = [];
+  const fromResume = [];
   const unsupported = [];
 
   for (const term of targetTerms) {
-    const { tokens: termTokens } = preprocess(term);
+    const termTokens = termStems(term);
     if (termTokens.length === 0) continue;
-    // Evidenced only when every stem of the term appears in the bullet.
-    const isPresent = termTokens.every((t) => present.has(t));
-    (isPresent ? evidenced : unsupported).push(term);
+
+    const covers = (set) => coveredBy(termTokens, set);
+
+    if (covers(inBullet)) evidenced.push(term);
+    else if (covers(inEntry)) fromEntry.push(term);
+    else if (covers(inResume)) fromResume.push(term);
+    else unsupported.push(term);
   }
 
-  return { evidenced, unsupported };
+  return { evidenced, fromEntry, fromResume, unsupported };
+}
+
+/** A softer question for a skill the resume claims but this bullet does not show. */
+export function buildPlacementQuestion(terms, entryTitle) {
+  const list = terms.map((t) => `"${t}"`).join(', ');
+  const where = entryTitle ? `your work on ${entryTitle}` : 'this specific work';
+  return `Your resume already lists ${list}, so we know you have it. Did you use it in ${where}? ` +
+    `If yes we will work it into this bullet. If it belongs to different work, say no — ` +
+    `putting it here would point a recruiter at the wrong project.`;
 }
 
 /** Structural weaknesses worth flagging regardless of keyword coverage. */
@@ -98,58 +132,85 @@ export function buildGapQuestion(unsupported, jobTitle) {
  * @param {object}   args.provider     { rewrite(payload): Promise<string> }
  */
 export async function suggestForBullet({
-  bullet, targetTerms = [], jobTitle = null, userEvidence = null, provider,
+  bullet, targetTerms = [], jobTitle = null, userEvidence = null, context = {}, provider,
 }) {
   const original = String(bullet ?? '').trim();
   if (!original) {
     throw Object.assign(new Error('A bullet is required'), { status: 400 });
   }
 
-  const { evidenced, unsupported } = classifyTerms(original, targetTerms);
+  const { evidenced, fromEntry, fromResume, unsupported } =
+    classifyTerms(original, targetTerms, context);
   const issues = critiqueBullet(original);
 
   // The user answered a previous question describing real experience. That
-  // answer is now evidence, so the terms it covers become writable.
+  // answer is evidence, so whatever it covers becomes writable.
   let confirmed = [];
   let stillUnsupported = unsupported;
-  if (userEvidence && unsupported.length > 0) {
-    const check = classifyTerms(userEvidence, unsupported);
-    confirmed = check.evidenced;
-    stillUnsupported = check.unsupported;
+  let stillMisplaced = fromResume;
+
+  if (userEvidence) {
+    const open = [...unsupported, ...fromResume];
+    if (open.length > 0) {
+      const check = classifyTerms(userEvidence, open);
+      confirmed = check.evidenced;
+      const answered = new Set(confirmed);
+      stillUnsupported = unsupported.filter((t) => !answered.has(t));
+      stillMisplaced = fromResume.filter((t) => !answered.has(t));
+    }
   }
 
-  // Nothing can be written yet: every requested term is unevidenced and the
-  // user has not told us otherwise. Ask instead of inventing.
-  if (evidenced.length === 0 && confirmed.length === 0 && stillUnsupported.length > 0) {
+  // A term the entry's own tech stack declares is safe to surface: that work
+  // demonstrably used it, even if this one sentence does not say the word.
+  const writable = [...evidenced, ...fromEntry, ...confirmed];
+
+  // Two kinds of open question, because they are genuinely different. One asks
+  // whether the experience exists at all; the other asks whether experience we
+  // already know about belongs in this bullet.
+  const questions = [];
+  if (stillUnsupported.length > 0) questions.push(buildGapQuestion(stillUnsupported, jobTitle));
+  if (stillMisplaced.length > 0) questions.push(buildPlacementQuestion(stillMisplaced, context.entryTitle));
+
+  // Nothing can be written: every requested term is unevidenced or misplaced,
+  // and the user has not told us otherwise. Ask rather than invent.
+  if (writable.length === 0 && questions.length > 0) {
     return {
       original,
       status: 'needs_input',
       suggested: null,
-      question: buildGapQuestion(stillUnsupported, jobTitle),
+      question: questions.join('\n\n'),
       termsAddressed: [],
-      termsRequiringConfirmation: stillUnsupported,
+      termsRequiringConfirmation: [...stillUnsupported, ...stillMisplaced],
+      evidence: { fromBullet: evidenced, fromEntry, fromResume, confirmed },
       issues,
-      rationale: 'Every requested term is absent from this bullet, so writing one would mean inventing experience.',
+      rationale: stillUnsupported.length > 0
+        ? 'Every requested term is absent from your resume, so writing one would mean inventing experience.'
+        : 'Your resume lists these skills, but this bullet does not show them being used here.',
     };
   }
 
-  const writable = [...evidenced, ...confirmed];
   const suggested = await provider.rewrite({
     original, writable, issues, jobTitle, userEvidence,
   });
+
+  const why = [];
+  if (evidenced.length > 0) why.push(`${evidenced.join(', ')} (already in this bullet)`);
+  if (fromEntry.length > 0) why.push(`${fromEntry.join(', ')} (from this entry's stack)`);
+  if (confirmed.length > 0) why.push(`${confirmed.join(', ')} (you confirmed it)`);
 
   return {
     original,
     status: 'suggested',
     suggested,
-    // Even when we can write something, any term still unevidenced is
-    // surfaced as an open question rather than quietly dropped.
-    question: stillUnsupported.length > 0 ? buildGapQuestion(stillUnsupported, jobTitle) : null,
+    // Even when something is writable, anything still open is surfaced rather
+    // than quietly dropped.
+    question: questions.length > 0 ? questions.join('\n\n') : null,
     termsAddressed: writable,
-    termsRequiringConfirmation: stillUnsupported,
+    termsRequiringConfirmation: [...stillUnsupported, ...stillMisplaced],
+    evidence: { fromBullet: evidenced, fromEntry, fromResume, confirmed },
     issues,
-    rationale: writable.length > 0
-      ? `Rewritten to surface ${writable.join(', ')}, which this bullet already evidences.`
+    rationale: why.length > 0
+      ? `Rewritten to surface ${why.join('; ')}.`
       : 'Rewritten for structure only; no new skill claims were added.',
   };
 }

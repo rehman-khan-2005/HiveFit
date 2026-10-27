@@ -7,6 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config/env.js';
 import { explainDbError } from './preflight.js';
+import { migrate } from './migrate.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -24,11 +25,20 @@ async function main() {
   const sql = await readFile(resolve(here, 'schema.sql'), 'utf8');
   await conn.query(sql);
 
+  // schema.sql only creates what is missing, so an existing database needs the
+  // additive migrations applied on top.
+  const applied = await migrate(conn);
+
   const [tables] = await conn.query('SHOW TABLES');
   await conn.end();
 
   console.log(`applied schema.sql — ${tables.length} tables:`);
   for (const row of tables) console.log(`  - ${Object.values(row)[0]}`);
+
+  if (applied.length > 0) {
+    console.log(`migrated ${applied.length} existing column(s)/index(es):`);
+    for (const change of applied) console.log(`  + ${change}`);
+  }
 }
 
 main().catch((err) => {

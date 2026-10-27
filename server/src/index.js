@@ -49,7 +49,7 @@ export function createApp() {
     res.status(database === 'up' ? 200 : 503).json({
       status: database === 'up' ? 'ok' : 'degraded',
       database,
-      jobsProvider: config.jobs.provider,
+      jobsProvider: config.jobs.providers.join('+'),
       aiProvider: config.ai.provider,
     });
   });
@@ -76,7 +76,7 @@ if (isMain) {
   const app = createApp();
   const server = app.listen(config.port, () => {
     console.log(`HiveFit API listening on http://localhost:${config.port}`);
-    console.log(`  jobs: ${config.jobs.provider}   ai: ${config.ai.provider}   db: ${config.db.database}`);
+    console.log(`  jobs: ${config.jobs.providers.join('+')}   ai: ${config.ai.provider}   db: ${config.db.database}`);
   });
 
   const shutdown = async (signal) => {

@@ -73,6 +73,31 @@ export function isKnownSkill(stemmedTerm) {
   return STEM_TO_CATEGORY.has(stemmedTerm);
 }
 
+// Skills worth offering as a filter.
+//
+// Deliberately a separate, curated list rather than a slice of the taxonomy
+// above. The taxonomy is stored as space-separated words because that is all
+// the scorer needs — "machine learning" and "unit testing" are two tokens
+// each, with no phrase boundary recorded. That is harmless for scoring, where
+// both halves legitimately count as skill evidence, and useless for a filter
+// menu: it offers "learn", "units" and "excellence" as skills to narrow by.
+//
+// A filter list is a curated affordance, so it is curated: unambiguous,
+// single-token technology names a user would actually recognise and pick.
+const FILTERABLE = `python java javascript typescript c++ c# ruby go rust php swift kotlin scala matlab
+  sql nosql html css sass graphql react angular vue svelte next.js node.js express django flask spring rails laravel
+  mongodb mysql postgresql redis elasticsearch kafka rabbitmq sqlite oracle snowflake databricks
+  aws azure gcp docker kubernetes terraform ansible jenkins circleci git github gitlab jira figma postman
+  linux unix bash powershell tableau airflow spark hadoop pandas numpy tensorflow pytorch scikit jupyter
+  ci/cd webpack npm yarn maven gradle selenium cypress pyspark`;
+
+const FILTERABLE_STEMS = new Set(preprocess(FILTERABLE).tokens);
+
+/** Whether a stem is one of the curated, filterable technology names. */
+export function isFilterableSkill(stemmedTerm) {
+  return FILTERABLE_STEMS.has(stemmedTerm);
+}
+
 export function taxonomySize() {
   return STEM_TO_CATEGORY.size;
 }

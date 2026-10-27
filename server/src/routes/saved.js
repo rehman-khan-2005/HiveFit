@@ -43,7 +43,11 @@ savedRouter.get('/', asyncRoute(async (req, res) => {
   const rows = await query(
     `SELECT s.id, s.status, s.notes, s.created_at, s.updated_at,
             j.id AS job_posting_id, j.title, j.company, j.location, j.url,
-            j.salary_min, j.salary_max
+            j.salary_min, j.salary_max,
+            -- Deliberately not filtered out. A job the user is tracking that
+            -- has since been pulled is information they want, not a row to
+            -- silently drop out from under an application in progress.
+            j.expired_at, j.closes_at
        FROM saved_jobs s
        JOIN job_postings j ON j.id = s.job_posting_id
       WHERE s.user_id = ? ${filter ? 'AND s.status = ?' : ''}

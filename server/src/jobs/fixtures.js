@@ -146,7 +146,15 @@ export const FIXTURE_JOBS = [
 
 /** Normalize whitespace so stored descriptions are not full of source indentation. */
 function clean(job) {
-  return { ...job, source: 'fixtures', description: job.description.replace(/\s+/g, ' ').trim() };
+  return {
+    ...job,
+    source: 'fixtures',
+    description: job.description.replace(/\s+/g, ' ').trim(),
+    // Shape-compatible with the live providers so the persistence layer
+    // never has to ask which source a posting came from.
+    posted_at: null,
+    closes_at: null,
+  };
 }
 
 /** Keyword search over the fixture set, mimicking a job API's query semantics. */

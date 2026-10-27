@@ -8,9 +8,11 @@
 import { preprocess } from './tokenize.js';
 import { TfidfVectorizer } from './tfidf.js';
 import { compatibilityScore, requirementCoverage } from './similarity.js';
+import { bm25Score } from './bm25.js';
 import { isKnownSkill } from './categories.js';
 import { analyzeKeywordGap } from './keywordGap.js';
-import { extractBullets } from './parse.js';
+import { findUnderhighlighted, summarizeUnderhighlighted } from './highlight.js';
+import { parseResume } from './parse.js';
 
 // Bands calibrated against reference pairs (see tests/scoring.test.js): a
 // resume scored against a posting rewritten from it lands ~90, a genuine but
@@ -47,11 +49,19 @@ export function analyzeResume({ resumeText, jobs, backgroundCorpus = [] }) {
   // plus any background corpus — so term weights reflect the job market
   // rather than the two documents in front of us.
   const vectorizer = new TfidfVectorizer();
-  vectorizer.fit([...jobDocs.map((d) => d.tokens), ...background, resume.tokens]);
+  const corpus = [...jobDocs.map((d) => d.tokens), ...background, resume.tokens];
+  vectorizer.fit(corpus);
+
+  // BM25 normalizes for document length, so it needs the corpus average to
+  // normalize against.
+  const averageDocumentLength = corpus.reduce((sum, doc) => sum + doc.length, 0) / (corpus.length || 1);
 
   const resumeVector = vectorizer.transform(resume.tokens);
   const resumeTermSet = new Set(resume.tokens);
-  const bullets = extractBullets(resumeText);
+  const parsed = parseResume(resumeText);
+  const bullets = parsed.bullets
+    .map((b) => b.text)
+    .filter((t) => t.length >= 25 && t.length <= 600);
 
   const results = jobs.map((job, index) => {
     const jobDoc = jobDocs[index];
@@ -66,6 +76,18 @@ export function analyzeResume({ resumeText, jobs, backgroundCorpus = [] }) {
     const overallCoverage = requirementCoverage(jobVector, resumeTermSet);
     const similarity = compatibilityScore(resumeVector, jobVector);
 
+    // Reported alongside, not instead of. BM25 is the standard retrieval
+    // baseline and answers the fair objection that cosine over raw TF-IDF
+    // treats the eighth mention of a term as worth as much as the second;
+    // keeping all three visible is what lets the scoring be argued about
+    // rather than taken on faith.
+    const retrieval = bm25Score({
+      documentTokens: resume.tokens,
+      queryTokens: jobDoc.tokens,
+      idfFor: (term) => vectorizer.idfFor(term),
+      averageDocumentLength,
+    });
+
     // Display spellings come from the posting first: we are naming terms the
     // posting used, and want the posting's own capitalization.
     const surface = new Map([...resume.surface, ...jobDoc.surface]);
@@ -76,19 +98,38 @@ export function analyzeResume({ resumeText, jobs, backgroundCorpus = [] }) {
       surface,
     });
 
+    // Requirements this resume meets but does not demonstrate. Deliberately
+    // separate from the gap above: a gap term needs the user to confirm real
+    // experience before anything can be written, while everything here is
+    // already evidenced somewhere on the page and only needs moving.
+    const underhighlighted = findUnderhighlighted({
+      jobVector,
+      parsed,
+      resumeSet: resumeTermSet,
+      surface,
+    });
+
     return {
       jobId: job.id ?? null,
       title: job.title ?? null,
       company: job.company ?? null,
+      url: job.url ?? null,
       score,
       overallCoverage,
       similarity,
+      retrieval,
       verdict: verdictFor(score),
       categories: gap.categories,
       prioritizedGap: gap.prioritized,
+      underhighlighted,
+      underhighlightedSummary: summarizeUnderhighlighted(underhighlighted),
       topJobTerms: vectorizer.topTerms(jobVector, 15),
     };
   });
+
+  // Ordered before anything downstream sees it, so the ranking holds in the
+  // API response, the persisted rows, and the UI without each one re-sorting.
+  const ranked = rankResults(results);
 
   return {
     resume: {
@@ -96,17 +137,48 @@ export function analyzeResume({ resumeText, jobs, backgroundCorpus = [] }) {
       uniqueTerms: new Set(resume.tokens).size,
       bulletCount: bullets.length,
       bullets,
+      // Structure the UI can show: which sections were recognized, and the
+      // skills the resume explicitly claims.
+      name: parsed.name,
+      sections: parsed.sections.map((sec) => ({
+        title: sec.title,
+        kind: sec.kind,
+        entries: sec.entries.map((e) => ({
+          title: e.title, org: e.org, location: e.location, tech: e.tech, dates: e.dates,
+        })),
+      })),
+      skills: parsed.skills,
     },
-    results,
-    comparison: summarize(results),
+    results: ranked,
+    comparison: summarize(ranked),
   };
 }
 
-/** Cross-posting view: where you stand across the pool, and what recurs. */
+/**
+ * Best match first.
+ *
+ * A pool of postings is only useful ordered — the top of the list is where the
+ * user should spend the afternoon. Ties break on overall coverage and then
+ * title so that identical inputs always produce an identical order, rather
+ * than preserving whatever order the caller happened to pass postings in.
+ */
+function rankResults(results) {
+  return [...results]
+    .sort((a, b) => (
+      b.score - a.score
+      || b.overallCoverage - a.overallCoverage
+      || String(a.title ?? '').localeCompare(String(b.title ?? ''))
+    ))
+    .map((result, index) => ({ ...result, rank: index + 1 }));
+}
+
+/**
+ * Cross-posting view: where you stand across the pool, and what recurs.
+ * Takes the ranked list, so best and worst are just its ends.
+ */
 function summarize(results) {
   const scores = results.map((r) => r.score);
   const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
-  const sorted = [...results].sort((a, b) => b.score - a.score);
 
   // A term missing from many postings is a systemic gap worth fixing once,
   // rather than a quirk of a single posting.
@@ -122,6 +194,34 @@ function summarize(results) {
     }
   }
 
+  // The same question for skills the user already has: a term buried across
+  // most of the pool is one edit that lifts every application, and unlike a
+  // recurring gap it needs no new experience to fix.
+  const buriedCounts = new Map();
+  for (const result of results) {
+    for (const item of result.underhighlighted) {
+      const existing = buriedCounts.get(item.stem) ?? {
+        term: item.term, category: item.category, categoryLabel: item.categoryLabel,
+        placement: item.placement, foundIn: item.foundIn, action: item.action,
+        candidateBullets: item.candidateBullets, count: 0, totalWeight: 0,
+      };
+      existing.count += 1;
+      existing.totalWeight += item.weight;
+      buriedCounts.set(item.stem, existing);
+    }
+  }
+
+  const recurringUnderhighlighted = [...buriedCounts.values()]
+    .filter((b) => b.count > 1)
+    .sort((a, b) => b.count - a.count || b.totalWeight - a.totalWeight)
+    .slice(0, 10)
+    .map((b) => ({
+      ...b,
+      totalWeight: Math.round(b.totalWeight * 10000) / 10000,
+      appearsInPostings: b.count,
+      coverage: `${b.count} of ${results.length} postings`,
+    }));
+
   const recurringGaps = [...missingCounts.values()]
     .filter((g) => g.count > 1)
     .sort((a, b) => b.count - a.count || b.totalWeight - a.totalWeight)
@@ -136,10 +236,19 @@ function summarize(results) {
   return {
     postingsCompared: results.length,
     averageScore: Math.round(mean * 100) / 100,
-    bestScore: sorted[0]?.score ?? 0,
-    worstScore: sorted[sorted.length - 1]?.score ?? 0,
-    bestMatch: sorted[0] ? { jobId: sorted[0].jobId, title: sorted[0].title, score: sorted[0].score } : null,
+    bestScore: results[0]?.score ?? 0,
+    worstScore: results[results.length - 1]?.score ?? 0,
+    bestMatch: results[0]
+      ? {
+        jobId: results[0].jobId,
+        title: results[0].title,
+        company: results[0].company,
+        url: results[0].url,
+        score: results[0].score,
+      }
+      : null,
     recurringGaps,
+    recurringUnderhighlighted,
     interpretation: interpret(mean, results.length),
   };
 }

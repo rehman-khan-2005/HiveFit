@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS resumes (
 
 CREATE TABLE IF NOT EXISTS job_postings (
   id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  source        VARCHAR(40)  NOT NULL DEFAULT 'manual',  -- adzuna | muse | usajobs | manual
+  source        VARCHAR(40)  NOT NULL DEFAULT 'manual',  -- adzuna | muse | fixtures | manual
   external_id   VARCHAR(120),
   title         VARCHAR(255) NOT NULL,
   company       VARCHAR(255),
@@ -41,17 +41,43 @@ CREATE TABLE IF NOT EXISTS job_postings (
   salary_max    DECIMAL(12,2),
   url           VARCHAR(1000),
   created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Listing lifecycle. Job boards are a moving target: postings appear, get
+  -- filled, and are pulled. Without these the pool only ever grows, and a
+  -- resume analysed on Monday and again on Thursday sees an identical, ever-
+  -- staler set of jobs.
+  -- Where the job is, for the map view. Nullable throughout: plenty of
+  -- postings are remote, or name a place no gazetteer resolves.
+  latitude      DECIMAL(9,6) NULL,
+  longitude     DECIMAL(9,6) NULL,
+  geo_source    VARCHAR(20) NULL,   -- provider | gazetteer | none
+  posted_at     DATETIME NULL,      -- publication date, when the board states one
+  closes_at     DATETIME NULL,      -- stated application deadline, when a board gives one
+  first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expired_at    DATETIME NULL,      -- inferred gone: sweeps stopped returning it
+  -- Confirmed gone by fetching the listing itself. Separate from expired_at
+  -- because a re-sighting clears that one, and a board that keeps serving a
+  -- dead listing would otherwise resurrect it on every single sweep.
+  unavailable_at DATETIME NULL,
+  checked_at    DATETIME NULL,      -- last liveness check, so checks round-robin
   UNIQUE KEY uq_posting_source (source, external_id),
-  INDEX idx_posting_title (title)
+  INDEX idx_posting_title (title),
+  INDEX idx_posting_active (expired_at, last_seen_at),
+  INDEX idx_posting_checked (unavailable_at, checked_at),
+  -- Bounding-box lookups for the map pan over the stored pool.
+  INDEX idx_posting_geo (latitude, longitude)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS ats_analyses (
   id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   resume_id       INT UNSIGNED NOT NULL,
   job_posting_id  INT UNSIGNED NOT NULL,
-  score           DECIMAL(5,2) NOT NULL,          -- 0.00 - 100.00 cosine similarity
+  score           DECIMAL(5,2) NOT NULL,          -- headline: IDF-weighted requirement coverage
+  retrieval       DECIMAL(5,2) NULL,              -- BM25, reported alongside for comparison
+  similarity      DECIMAL(5,2) NULL,              -- raw TF-IDF cosine from stage 2.4
   category_scores JSON NOT NULL,                  -- per-category transparency breakdown
   keyword_gap     JSON NOT NULL,                  -- missing terms grouped by category
+  underhighlighted JSON NULL,                     -- requirements met but not demonstrated
   created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_analysis_resume  FOREIGN KEY (resume_id)      REFERENCES resumes(id)      ON DELETE CASCADE,
   CONSTRAINT fk_analysis_posting FOREIGN KEY (job_posting_id) REFERENCES job_postings(id) ON DELETE CASCADE,

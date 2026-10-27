@@ -1,0 +1,35 @@
+Rehman Khan
+US Citizen | 555-000-0000 | first.last@example.com | linkedin.com/in/example
+Education
+New York Institute of Technology New York, NY
+Bachelor of Science in Computer Science; GPA: 3.85 December 2026
+Academic Acknowledgements: President's List (September 2023 - Present), National Honor Society
+Relevant Coursework: Data Structures, Design & Analysis of Algorithms, Operating Systems, Computer
+Organization & Architecture, Discrete Structures
+Google Online
+Cybersecurity Professional Certificate December 2025
+Technical Skills
+Languages: Assembly, HTML/CSS, Java, JavaScript, Python, MatLab, MySQL
+Frameworks: React, Node.js,
+Developer Tools: Git, Google Suite, VS Code, Visual Studio, PyCharm, IntelliJ
+Libraries: NumPy, Matplotlib
+Projects
+ML-Based Network Intrusion Detection System | Python, Scikit-learn, Pandas, Zeek Present
+• Engineered a supervised learning pipeline that classifies network traffic as benign or malicious, training Random
+Forest and gradient boosting models on the CIC-IDS2017 dataset across 15+ attack categories.
+• Extracted and normalized flow-level features from Zeek logs, applying feature selection and class balancing to reach
+97% detection accuracy while holding the false-positive rate under 2%.
+Ease-On | React, Node.js, PostgreSQL, Firebase, Capacitor May 2026
+• Full Stack development on a community wellness application, designing RESTful Node.js/Express endpoints and a
+normalized PostgreSQL schema for user profiles, activity tracking, and resource discovery.
+• Implemented secure authentication and session management through Firebase, enforcing role-based access control
+and server-side request validation to protect user health and profile data.
+Leadership
+Computer Aide Intern/Co-Op | Con Edison | New York, NY June 2026 - Present
+• Built a reconciliation application for operators and analysts in Gas Control, automating manual data matching
+across system records which significantly increased daily reconciliation efficiency and accuracy.
+• Provided desktop and application support to Gas Control and Operations staff, troubleshooting hardware, software,
+and network issues to allow for minimal downtime.
+IT Manager | Beverage Distribution Company | New York, NY September 2019 - May 2026
+• Managed and coordinated a team of 6 staff using workflow optimization and task-tracking processes, ensuring
+reliable service delivery to 100+ client systems across New York City.

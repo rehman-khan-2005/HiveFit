@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  View, Text, Pressable, ActivityIndicator, StyleSheet, TextInput,
+  View, Text, Pressable, ActivityIndicator, StyleSheet, TextInput, Linking,
 } from 'react-native';
 import { colors, spacing, radius, type, shadow, scoreColor } from '../theme';
 
@@ -62,36 +62,14 @@ export function ScoreBadge({ score, size = 'lg' }) {
 }
 
 /** One row of the transparent category breakdown. */
-export function CategoryBar({ category }) {
-  return (
-    <View style={{ marginBottom: spacing.md }}>
-      <View style={styles.row}>
-        <Text style={type.h3}>{category.label}</Text>
-        <Text style={[type.mono, { color: scoreColor(category.coverage), fontWeight: '700' }]}>
-          {category.coverage}%
-        </Text>
-      </View>
-
-      <View style={styles.track}>
-        <View style={[
-          styles.fill,
-          { width: `${Math.max(2, category.coverage)}%`, backgroundColor: scoreColor(category.coverage) },
-        ]} />
-      </View>
-
-      <Text style={[type.small, { marginTop: spacing.xs }]}>
-        {category.termsMatched}/{category.termsRequired} matched · {category.weightInPosting}% of this posting
-      </Text>
-      <Text style={[type.body, { marginTop: spacing.xs, fontSize: 14 }]}>{category.explanation}</Text>
-    </View>
-  );
-}
-
 export function Chip({ label, tone = 'neutral', onPress, selected }) {
   const toneStyle =
     tone === 'critical' ? { backgroundColor: '#FDECEA', borderColor: '#F5C6C0' }
       : tone === 'important' ? { backgroundColor: colors.honeyFaint, borderColor: '#F3DDB0' }
-        : { backgroundColor: colors.canvas, borderColor: colors.line };
+        // Green means "already evidenced" — a term that can be written with no
+        // further questions. Same meaning everywhere it appears.
+        : tone === 'success' ? { backgroundColor: '#E8F5E9', borderColor: '#A5D6A7' }
+          : { backgroundColor: colors.canvas, borderColor: colors.line };
 
   const Wrapper = onPress ? Pressable : View;
   return (
@@ -101,6 +79,32 @@ export function Chip({ label, tone = 'neutral', onPress, selected }) {
     >
       <Text style={{ fontSize: 13, color: colors.ink }}>{label}</Text>
     </Wrapper>
+  );
+}
+
+/**
+ * Link out to the posting itself.
+ *
+ * Shared rather than rewritten per screen: this is the one control that ends
+ * the whole flow, so it should look and read identically wherever a posting
+ * appears. Renders nothing when the provider gave no URL — a dead "Apply"
+ * button is worse than no button.
+ */
+export function ApplyLink({ url, label = 'Apply', style, compact = false }) {
+  if (!url) return null;
+
+  if (compact) {
+    return (
+      <Pressable onPress={() => Linking.openURL(url)} style={style} hitSlop={8}>
+        <Text style={{ fontSize: 13, fontWeight: '700', color: colors.honeyDark }}>
+          {label} ↗
+        </Text>
+      </Pressable>
+    );
+  }
+
+  return (
+    <Button title={`${label} ↗`} variant="ghost" onPress={() => Linking.openURL(url)} style={style} />
   );
 }
 

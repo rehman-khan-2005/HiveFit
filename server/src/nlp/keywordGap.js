@@ -17,7 +17,8 @@ const IMPORTANCE_TIERS = [
   { min: 0, label: 'minor' },
 ];
 
-function importanceOf(relativeWeight) {
+/** Weight relative to the posting's heaviest term, as a tier label. */
+export function importanceOf(relativeWeight) {
   return IMPORTANCE_TIERS.find((tier) => relativeWeight >= tier.min).label;
 }
 
@@ -25,7 +26,7 @@ function explain(category, coverage, missingCount, totalCount) {
   const label = CATEGORY_LABELS[category];
   const matched = totalCount - missingCount;
   if (totalCount === 0) {
-    return `This posting does not emphasize ${label.toLowerCase()}, so this category does not affect your score.`;
+    return `This posting asks for no ${label.toLowerCase()}, so there is nothing to cover and no score to report. Not applicable rather than perfect.`;
   }
   if (coverage >= 90) {
     return `Your resume covers ${matched} of the ${totalCount} ${label.toLowerCase()} this posting asks for. This is a strong area — no action needed.`;
@@ -88,9 +89,16 @@ export function analyzeKeywordGap({ jobVector, resumeTokens, surface, limit = 40
   const categories = [];
   for (const name of CATEGORY_NAMES) {
     const bucket = buckets.get(name);
-    const coverage = bucket.total > 0
+
+    // A category this posting never mentions has no coverage to report. It
+    // used to read 100%, which is actively misleading in the other direction:
+    // a resume with no soft skills at all showed "Soft Skills 100%" on a
+    // posting that happened not to ask for any. There is nothing to be perfect
+    // at, so the number is null and the UI shows N/A.
+    const applicable = bucket.total > 0;
+    const coverage = applicable
       ? Math.round((bucket.covered / bucket.total) * 10000) / 100
-      : 100;
+      : null;
 
     bucket.missing.sort(
       (a, b) => b.recognizedSkill - a.recognizedSkill || b.weight - a.weight
@@ -99,6 +107,7 @@ export function analyzeKeywordGap({ jobVector, resumeTokens, surface, limit = 40
     categories.push({
       category: name,
       label: CATEGORY_LABELS[name],
+      applicable,
       coverage,
       termsRequired: bucket.totalTerms,
       termsMatched: bucket.totalTerms - bucket.missingTerms,

@@ -103,8 +103,19 @@ export const api = {
   decideSuggestion: (id, accepted) => request(`/suggestions/${id}`, { method: 'PATCH', body: { accepted } }),
 
   // 4.0 Job search
-  searchJobs: (query, location) =>
-    request(`/jobs/search?query=${encodeURIComponent(query ?? '')}&location=${encodeURIComponent(location ?? '')}`),
+  searchJobs: (query, location, limit, field, skills) =>
+    request(`/jobs/search?query=${encodeURIComponent(query ?? '')}`
+      + `&location=${encodeURIComponent(location ?? '')}`
+      + (limit ? `&limit=${Number(limit)}` : '')
+      + (field ? `&field=${encodeURIComponent(field)}` : '')
+      + (skills?.length ? `&skills=${encodeURIComponent(skills.join(','))}` : '')),
+  // How the pool has moved lately, without running a search to find out.
+  jobFreshness: () => request('/jobs/freshness'),
+  // Postings inside a map viewport. bbox is Leaflet's "minLng,minLat,maxLng,maxLat".
+  jobsInBounds: (bbox, field, skills) =>
+    request(`/jobs/map?bbox=${encodeURIComponent(bbox)}`
+      + (field ? `&field=${encodeURIComponent(field)}` : '')
+      + (skills?.length ? `&skills=${encodeURIComponent(skills.join(','))}` : '')),
 
   // 5.0 Application tracker
   listSavedJobs: (status) => request(`/saved-jobs${status ? `?status=${encodeURIComponent(status)}` : ''}`),

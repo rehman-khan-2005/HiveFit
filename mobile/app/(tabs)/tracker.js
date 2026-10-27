@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 
 import { api } from '../../src/api/client';
-import { Card, Banner, Empty, Loading, Chip } from '../../src/components/ui';
+import { Card, Banner, Empty, Loading, Chip, ApplyLink } from '../../src/components/ui';
 import { colors, spacing, type } from '../../src/theme';
 
 // The five lifecycle states from the ERD.
@@ -100,10 +100,21 @@ export default function TrackerScreen() {
                 <Text style={type.small}>
                   {job.company ?? 'Unknown'}{job.location ? ` · ${job.location}` : ''}
                 </Text>
+                {/* Kept in the tracker rather than removed: an application in
+                    progress against a posting that has closed is something the
+                    user needs to know, not something to quietly delete. */}
+                {job.expired_at ? (
+                  <Text style={[type.small, { marginTop: 2, color: colors.danger }]}>
+                    No longer listed — this posting has come down since you saved it.
+                  </Text>
+                ) : null}
               </View>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: STATUS_COLOR[job.status] }}>
-                {job.status.toUpperCase()}
-              </Text>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: STATUS_COLOR[job.status] }}>
+                  {job.status.toUpperCase()}
+                </Text>
+                <ApplyLink url={job.url} label="Open" compact style={{ marginTop: 4 }} />
+              </View>
             </View>
 
             <Text style={[type.small, { marginTop: spacing.sm, marginBottom: spacing.xs }]}>

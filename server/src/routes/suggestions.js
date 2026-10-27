@@ -6,15 +6,16 @@ import { requireAuth } from '../middleware/auth.js';
 import { asyncRoute, badRequest, notFound } from '../middleware/error.js';
 import { suggestForBullet } from '../ai/suggest.js';
 import { getProvider } from '../ai/provider.js';
+import { parseResume } from '../nlp/parse.js';
 import { intParam, optionalString } from '../utils/validate.js';
 
 export const suggestionRouter = Router();
 suggestionRouter.use(requireAuth);
 
-/** Confirm the analysis belongs to the signed-in user. */
+/** Confirm the analysis belongs to the signed-in user, and load its resume. */
 async function ownedAnalysis(analysisId, userId) {
   const rows = await query(
-    `SELECT a.id, j.title AS job_title
+    `SELECT a.id, j.title AS job_title, r.raw_text
        FROM ats_analyses a
        JOIN resumes r ON r.id = a.resume_id
        JOIN job_postings j ON j.id = a.job_posting_id
@@ -23,6 +24,27 @@ async function ownedAnalysis(analysisId, userId) {
   );
   if (rows.length === 0) throw notFound('Analysis not found');
   return rows[0];
+}
+
+/**
+ * Evidence available to the honesty check for one bullet: the skills the resume
+ * lists, plus the tech stack of the entry this bullet belongs to. Derived on
+ * the server so a client cannot widen its own evidence and talk the system into
+ * writing a skill the resume never claimed.
+ */
+function evidenceContextFor(rawText, bulletText) {
+  const parsed = parseResume(rawText);
+  const normalize = (t) => t.replace(/\s+/g, ' ').trim().toLowerCase();
+  const match = parsed.bullets.find((b) => normalize(b.text) === normalize(bulletText));
+
+  return {
+    entryTitle: match?.entryTitle ?? null,
+    entryTech: match?.entryTech ?? [],
+    // Coursework counts: having studied a subject is a real, if weaker, claim.
+    // Awards deliberately do not — an award's name matching a posting term is a
+    // coincidence, not evidence of a skill.
+    skills: [...parsed.skills.all, ...parsed.coursework],
+  };
 }
 
 /**
@@ -49,6 +71,7 @@ suggestionRouter.post('/', asyncRoute(async (req, res) => {
     targetTerms,
     jobTitle: analysis.job_title,
     userEvidence,
+    context: evidenceContextFor(analysis.raw_text, bullet),
     provider: getProvider(),
   });
 

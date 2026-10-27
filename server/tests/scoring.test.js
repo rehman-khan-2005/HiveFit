@@ -55,6 +55,9 @@ test('scores and coverage stay inside 0-100', () => {
       assert.ok(value >= 0 && value <= 100, `${value} out of range`);
     }
     for (const c of r.categories) {
+      // null is the deliberate value for a category the posting never asks
+      // about — see "an unmentioned category reports N/A" below.
+      if (c.coverage === null) continue;
       assert.ok(c.coverage >= 0 && c.coverage <= 100, `coverage ${c.coverage} out of range`);
     }
   }
