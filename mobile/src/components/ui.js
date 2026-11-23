@@ -2,7 +2,7 @@ import React from 'react';
 import {
   View, Text, Pressable, ActivityIndicator, StyleSheet, TextInput, Linking,
 } from 'react-native';
-import { colors, spacing, radius, type, shadow, scoreColor } from '../theme';
+import { colors, spacing, radius, type, shadow, scoreColor, fitColor } from '../theme';
 
 export function Card({ children, style }) {
   return <View style={[styles.card, style]}>{children}</View>;
@@ -59,6 +59,50 @@ export function ScoreBadge({ score, size = 'lg' }) {
       <Text style={{ fontSize: size === 'lg' ? 11 : 9, color: colors.muted }}>/ 100</Text>
     </View>
   );
+}
+
+/**
+ * Relative fit, as a coloured pill.
+ *
+ * Replaces the score circle in any list of postings. The wording is relative
+ * on purpose — "2nd of 12" is true whatever the absolute numbers are, where a
+ * bare "18 / 100" invites the user to read a grade the measure cannot support.
+ *
+ * `showScore` adds the raw figure for users who ask for it in preferences.
+ */
+export function FitBadge({ fit, score, rank, showScore = false }) {
+  const tone = fit?.tone ?? 'grey';
+  const color = fitColor(tone);
+
+  return (
+    <View style={{ alignItems: 'center', minWidth: 62 }}>
+      <View style={{
+        paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.pill,
+        borderWidth: 2, borderColor: color, backgroundColor: colors.surface,
+      }}>
+        <Text style={{ fontSize: 13, fontWeight: '700', color }}>
+          {rank ? `${ordinal(rank)}` : '—'}
+        </Text>
+      </View>
+      {fit ? (
+        <Text style={{ fontSize: 10, color: colors.muted, marginTop: 2 }}>
+          of {fit.comparedWith}
+        </Text>
+      ) : null}
+      {showScore ? (
+        <Text style={{ fontSize: 11, color: colors.muted, marginTop: 1, fontVariant: ['tabular-nums'] }}>
+          {Math.round(score)}%
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function ordinal(n) {
+  // 11th, 12th and 13th break the last-digit rule.
+  const rest = n % 100;
+  if (rest >= 11 && rest <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
 }
 
 /** One row of the transparent category breakdown. */

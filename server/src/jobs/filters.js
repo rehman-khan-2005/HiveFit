@@ -13,6 +13,7 @@
 import { preprocess } from '../nlp/tokenize.js';
 import { stemSet, termStems, coveredBy } from '../nlp/evidence.js';
 import { isFilterableSkill, categorize, CATEGORY_LABELS } from '../nlp/categories.js';
+import { locationScope } from './gazetteer.js';
 
 /**
  * Keep postings that require the given skills.
@@ -56,6 +57,25 @@ export function filterByLocation(jobs, location) {
 
   const target = normalize(needle);
   return jobs.filter((job) => normalize(job.location).includes(target));
+}
+
+/**
+ * Narrow a pool to where the user is willing to work.
+ *
+ * @param {string} scope  'any' | 'domestic' | 'remote'
+ *
+ * 'domestic' drops only postings confidently placed outside the US. A posting
+ * whose location could not be parsed is kept, because losing a usable job to a
+ * location string we failed to read is worse than showing one extra.
+ */
+export function filterByScope(jobs, scope) {
+  if (scope === 'remote') {
+    return jobs.filter((job) => locationScope(job.location) === 'remote');
+  }
+  if (scope === 'domestic') {
+    return jobs.filter((job) => locationScope(job.location) !== 'other');
+  }
+  return jobs;
 }
 
 // A term in nearly every posting cannot narrow anything. Filtering by a skill

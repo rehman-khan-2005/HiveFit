@@ -5,6 +5,8 @@ import { query, execute, transaction } from '../db/pool.js';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncRoute, badRequest, notFound } from '../middleware/error.js';
 import { analyzeResume, scoreGuide } from '../nlp/analyze.js';
+import { FIT_BANDS, SCORE_REALITY } from '../nlp/fit.js';
+import { getPreferences } from '../preferences/store.js';
 import { bulletsWithTargets } from '../nlp/bulletTargets.js';
 import { tailoringPlan } from '../ai/tailoring.js';
 import { backgroundCorpus } from '../jobs/index.js';
@@ -129,9 +131,18 @@ analysisRouter.post('/', asyncRoute(async (req, res) => {
     resume: { id: resume.id, title: resume.title, ...payload.resume },
     results: payload.results,
     comparison: payload.comparison,
+    // Whether a literal keyword search finds this resume, across the set.
+    keywords: payload.keywords,
     // What the ranges mean. Sent with the scores so the legend and the
     // thresholds can never disagree.
     scoreGuide: scoreGuide(),
+    // The relative bands each result carries, and what the percentage is
+    // actually worth. Both travel with the scores for the same reason.
+    fitBands: FIT_BANDS,
+    scoreReality: SCORE_REALITY,
+    // What this user wants to see of the above. Returned with the data so the
+    // first render is already their view, with no second request.
+    preferences: await getPreferences(req.user.id),
   });
 }));
 
@@ -227,5 +238,7 @@ analysisRouter.get('/:id', asyncRoute(async (req, res) => {
     },
     suggestions,
     scoreGuide: scoreGuide(),
+    scoreReality: SCORE_REALITY,
+    preferences: await getPreferences(req.user.id),
   });
 }));

@@ -22,6 +22,15 @@ export function importanceOf(relativeWeight) {
   return IMPORTANCE_TIERS.find((tier) => relativeWeight >= tier.min).label;
 }
 
+/**
+ * The relative weight at which a term stops being a passing mention.
+ *
+ * Shared with the headline score so that "important" means one thing. A term
+ * below this is named in the posting rather than leaned on by it, and the two
+ * should not be weighed the same when deciding whether a resume fits.
+ */
+export const LEANED_ON = IMPORTANCE_TIERS.find((tier) => tier.label === 'important').min;
+
 function explain(category, coverage, missingCount, totalCount) {
   const label = CATEGORY_LABELS[category];
   const matched = totalCount - missingCount;

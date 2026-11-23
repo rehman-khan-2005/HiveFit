@@ -279,6 +279,117 @@ async function main() {
   const removed = await call(`/saved-jobs/${savedId}`, { method: 'DELETE' });
   check('saved job removed', removed.status === 204);
 
+  console.log('\nrelative fit bands');
+  // Added after measuring the absolute bands against real listings and finding
+  // that every one of them lands in the bottom band. The list is banded
+  // against its own best instead.
+  check('each result above a single posting carries a relative fit band',
+    results.length < 2 || results.every((r) => r.fit?.tone),
+    JSON.stringify(results[0]?.fit));
+  check('the best result in the set is the closest match',
+    results.length < 2 || results[0].fit.band === 'close');
+  check('a fit band says what it is relative to',
+    results.length < 2 || results.every((r) => r.fit.comparedWith === results.length));
+  check('the band tone is one the interface can colour',
+    results.length < 2 || results.every((r) => ['green', 'amber', 'grey'].includes(r.fit.tone)));
+  check('the comparison counts how many fell in each band',
+    Array.isArray(analysis.data?.comparison?.fitBands)
+    && analysis.data.comparison.fitBands.reduce((n, b) => n + b.count, 0) === results.length);
+  check('the measured reality of the percentage ships with the scores',
+    /median/.test(analysis.data?.scoreReality?.measured ?? '')
+    && /calibrate/.test(analysis.data?.scoreReality?.reproduce ?? ''));
+
+  const single = await call('/analyses', {
+    method: 'POST',
+    body: { resumeId, jobPostingIds: [jobIds[0]] },
+  });
+  check('a single posting gets no fit band',
+    single.data?.results?.[0]?.fit === null,
+    'calling one posting the closest match of one is a tautology');
+
+  console.log('\nkeyword visibility');
+  const keywords = analysis.data?.keywords;
+  check('the analysis reports whether a keyword search can find the resume',
+    keywords && Array.isArray(keywords.missingSpellings) && Array.isArray(keywords.searchable));
+  check('every spelling suggestion is additive, never a replacement',
+    (keywords?.missingSpellings ?? []).every((m) => /as well as/.test(m.action)));
+  check('a spelling suggestion names how many postings use it',
+    (keywords?.missingSpellings ?? []).every((m) => m.postings >= 1
+      && m.postings <= keywords.postingsCompared));
+  check('nothing to report yields no summary line rather than a reassurance',
+    keywords?.missingSpellings?.length > 0
+      ? typeof keywords.summary === 'string'
+      : keywords?.summary === null);
+
+  console.log('\ndisplay preferences');
+  const defaults = await call('/preferences');
+  check('preferences are served with the options they were chosen from',
+    defaults.data?.schema?.length >= 4 && defaults.data?.preferences);
+  check('match strength defaults to colour, not a percentage',
+    defaults.data?.preferences?.scoreDisplay === 'band');
+  check('nothing is hidden by default',
+    defaults.data?.preferences?.hideBelow === 'nothing'
+    && defaults.data?.preferences?.locationScope === 'any');
+  check('every default is one of the offered options',
+    defaults.data.schema.every((pref) =>
+      pref.options.some((o) => o.value === defaults.data.preferences[pref.key])));
+  check('the advertised schema hides the column names',
+    defaults.data.schema.every((pref) => pref.column === undefined));
+
+  const saved2 = await call('/preferences', {
+    method: 'PATCH',
+    body: { hideBelow: 'far', detailLevel: 'summary' },
+  });
+  check('a change is stored and echoed back whole',
+    saved2.data?.preferences?.hideBelow === 'far'
+    && saved2.data?.preferences?.detailLevel === 'summary');
+
+  const rejected = await call('/preferences', {
+    method: 'PATCH',
+    body: { hideBelow: 'everything-above-50', nonsense: 'x' },
+  });
+  check('an unoffered value is ignored rather than failing the request',
+    rejected.status === 200 && rejected.data.preferences.hideBelow === 'far');
+  check('what was ignored is reported, not silently dropped',
+    (rejected.data?.ignored ?? []).includes('hideBelow')
+    && rejected.data.ignored.includes('nonsense'));
+
+  const persisted = await call('/preferences');
+  check('preferences survive the request that set them',
+    persisted.data?.preferences?.detailLevel === 'summary');
+
+  const withPrefs = await call('/analyses', {
+    method: 'POST',
+    body: { resumeId, jobPostingIds: jobIds.slice(0, 2) },
+  });
+  check('an analysis carries the user preferences, so the first render is their view',
+    withPrefs.data?.preferences?.detailLevel === 'summary');
+
+  const scoped = await call('/preferences', { method: 'PATCH', body: { locationScope: 'domestic' } });
+  check('the location preference is accepted', scoped.data?.preferences?.locationScope === 'domestic');
+  const domestic = await call('/jobs/search?limit=30&refresh=0');
+  check('the job search applies the location preference server-side',
+    domestic.data?.preferences?.locationScope === 'domestic'
+    && typeof domestic.data?.outOfScope === 'number');
+  check('a posting hidden by preference is reported separately from the search',
+    domestic.data.jobs.every((j) => !/\b(canada|united kingdom|india|germany|france)\b/i.test(j.location ?? '')),
+    JSON.stringify(domestic.data.jobs.slice(0, 3).map((j) => j.location)));
+
+  await call('/preferences', { method: 'PATCH', body: { locationScope: 'any', detailLevel: 'full', hideBelow: 'nothing' } });
+
+  console.log('\non-demand availability check');
+  const checked = await call(`/jobs/${jobIds[0]}/check`, { method: 'POST' });
+  check('a posting can be checked against its own page on demand',
+    checked.status === 200 && ['gone', 'unknown'].includes(checked.data?.status),
+    JSON.stringify(checked.data));
+  check('an inconclusive check is not reported as a dead job',
+    checked.data.status !== 'unknown' || checked.data.actionable === false,
+    'a 403 from a board says nothing about whether the job exists');
+  check('the check records when it happened', Boolean(checked.data?.checkedAt));
+
+  const missing = await call('/jobs/99999999/check', { method: 'POST' });
+  check('checking a posting that does not exist is a 404', missing.status === 404);
+
   console.log('\nauthorization');
   const noAuth = await fetch(`${BASE}/resumes`);
   check('protected route rejects anonymous access', noAuth.status === 401);

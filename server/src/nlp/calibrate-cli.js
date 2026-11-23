@@ -6,6 +6,7 @@
 import { calibrate, formatCalibration } from './calibration.js';
 import { REFERENCE_RESUME, REFERENCE_PAIRS } from './reference-pairs.js';
 import { analyzeResume, scoreGuide } from './analyze.js';
+import { METRICS } from './calibration.js';
 
 console.log('\nHiveFit scoring calibration');
 console.log('Resume scored against a labelled ladder of postings, best match first.\n');
@@ -41,23 +42,41 @@ if (liveFlag !== -1) {
       jobs: postings.map((p) => ({ id: p.id, title: p.title, description: p.description })),
     });
 
-    const scores = results.map((r) => r.score).sort((a, b) => a - b);
-    const at = (q) => scores[Math.min(scores.length - 1, Math.floor(q * scores.length))];
-    const counts = new Map();
-    for (const r of results) counts.set(r.verdict.band, (counts.get(r.verdict.band) ?? 0) + 1);
+    // Both candidates, side by side. The ladder cannot tell them apart —
+    // its postings are short enough that every recognized skill in them is
+    // already a leaned-on one — so real listings are the only place the
+    // difference shows, and the only place the bands are actually applied.
+    const distribution = (key) => {
+      const scores = results.map((r) => r[key]).sort((a, b) => a - b);
+      const at = (q) => scores[Math.min(scores.length - 1, Math.floor(q * scores.length))];
+      const counts = new Map();
+      for (const value of scores) {
+        const tier = scoreGuide().find((t) => value >= t.floor);
+        counts.set(tier.band, (counts.get(tier.band) ?? 0) + 1);
+      }
+      return { scores, at, counts };
+    };
 
     console.log(`Against ${results.length} real postings from the stored pool`);
     console.log('(same resume, so the difference is the postings themselves)\n');
-    console.log(`  min ${scores[0].toFixed(1)}   median ${at(0.5).toFixed(1)}   p90 ${at(0.9).toFixed(1)}   max ${scores[scores.length - 1].toFixed(1)}\n`);
 
-    for (const tier of scoreGuide()) {
-      const n = counts.get(tier.band) ?? 0;
-      const share = Math.round((n / results.length) * 100);
-      const bar = '#'.repeat(Math.round(share / 2.5));
-      console.log(`  ${tier.label.padEnd(13)} ${tier.band.padEnd(9)} ${String(n).padStart(3)}  ${String(share).padStart(3)}%  ${bar}`);
+    for (const { key, label } of METRICS.filter((m) => m.key === 'score' || m.key === 'core')) {
+      const { scores, at, counts } = distribution(key);
+      console.log(`  ${label}`);
+      console.log(`  ${'-'.repeat(label.length)}`);
+      console.log(`  min ${scores[0].toFixed(1)}   median ${at(0.5).toFixed(1)}   p90 ${at(0.9).toFixed(1)}   max ${scores[scores.length - 1].toFixed(1)}\n`);
+
+      for (const tier of scoreGuide()) {
+        const n = counts.get(tier.band) ?? 0;
+        const share = Math.round((n / results.length) * 100);
+        const bar = '#'.repeat(Math.round(share / 2.5));
+        console.log(`  ${tier.label.padEnd(13)} ${tier.band.padEnd(9)} ${String(n).padStart(3)}  ${String(share).padStart(3)}%  ${bar}`);
+      }
+      console.log('');
     }
-    console.log('');
-    console.log('A band that catches nothing on real listings is a band the user never sees.');
+
+    console.log('A band that catches nothing on real listings is a band the user never sees,');
+    console.log('and a cutoff set above every real score hides the whole list.');
     console.log('');
     await pool.end();
   }

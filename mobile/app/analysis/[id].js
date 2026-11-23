@@ -21,6 +21,9 @@ export default function AnalysisDetail() {
   const [suggestion, setSuggestion] = useState(null);
   const [evidence, setEvidence] = useState('');
   const [busy, setBusy] = useState(false);
+  // Whether this posting is still live, checked on demand rather than assumed.
+  const [liveness, setLiveness] = useState(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -34,6 +37,27 @@ export default function AnalysisDetail() {
       }
     })();
   }, [id]);
+
+  /**
+   * Ask the posting's own page whether it is still there.
+   *
+   * On demand, because this is the moment it matters: the user is about to
+   * spend an hour tailoring a resume to this specific job. The nightly sweep
+   * checks the pool in bulk on a budget, which keeps the pool honest and says
+   * nothing about whether this one listing survived the week.
+   */
+  async function checkAvailability(jobId) {
+    setChecking(true);
+    try {
+      setLiveness(await api.checkJob(jobId));
+    } catch (err) {
+      // A failed check is not evidence the job is gone, and must not be shown
+      // as though it were.
+      setLiveness({ status: 'unknown', reason: err.message, actionable: false });
+    } finally {
+      setChecking(false);
+    }
+  }
 
   async function requestSuggestion(userEvidence = null) {
     setBusy(true);
@@ -98,6 +122,10 @@ export default function AnalysisDetail() {
   const { analysis } = data;
   const guide = data.scoreGuide ?? [];
   const plan = analysis.tailoring ?? null;
+  const reality = data.scoreReality ?? null;
+  // Summary mode keeps what the user acts on and drops what explains the
+  // measurement. Li's point: the full breakdown is a lot of page at once.
+  const brief = (data.preferences?.detailLevel ?? 'full') === 'summary';
   const gap = analysis.keywordGap ?? [];
   const buried = analysis.underhighlighted ?? [];
 
@@ -148,7 +176,33 @@ export default function AnalysisDetail() {
           style={{ marginTop: spacing.md }}
         />
 
-        {/* What the number means. Without this a 61 and an 81 read the same. */}
+        {/* Still open? Worth knowing before an hour of tailoring, and only the
+            posting's own page can answer it. */}
+        {analysis.job.url && analysis.job.id ? (
+          <View style={{ marginTop: spacing.sm }}>
+            {liveness ? (
+              <Text style={[type.small, {
+                color: liveness.status === 'gone' ? colors.danger : colors.muted,
+              }]}>
+                {liveness.status === 'gone'
+                  ? `This posting is gone — its page returns ${liveness.reason}. Apply elsewhere.`
+                  : `Could not confirm either way: ${liveness.reason}. `
+                    + 'Job boards block automated checks, so this is not a sign the job has closed.'}
+              </Text>
+            ) : (
+              <Button
+                title={checking ? 'Checking…' : 'Check this job is still open'}
+                variant="ghost"
+                onPress={() => checkAvailability(analysis.job.id)}
+                disabled={checking}
+              />
+            )}
+          </View>
+        ) : null}
+
+        {/* What the number means, and what it does not. The ladder below
+            describes the measure; the note under it is what the measure reads
+            on real listings, which is the part a bare percentage hides. */}
         {guide.length > 0 ? (
           <View style={{ marginTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: spacing.sm }}>
             <Text style={type.h3}>What this score means</Text>
@@ -184,11 +238,31 @@ export default function AnalysisDetail() {
                 </View>
               );
             })}
+
+            {reality ? (
+              <View style={{
+                marginTop: spacing.sm, padding: spacing.sm,
+                backgroundColor: colors.canvas, borderRadius: 8,
+                borderLeftWidth: 3, borderLeftColor: colors.honeyDark,
+              }}>
+                <Text style={[type.small, { color: colors.ink, fontWeight: '600' }]}>
+                  {reality.headline}
+                </Text>
+                <Text style={[type.small, { marginTop: 2 }]}>{reality.measured}</Text>
+                <Text style={[type.small, { marginTop: 2 }]}>{reality.why}</Text>
+                <Text style={[type.small, { marginTop: 2, color: colors.muted }]}>
+                  Reproduce: {reality.reproduce}
+                </Text>
+              </View>
+            ) : null}
           </View>
         ) : null}
       </Card>
 
-      {/* Transparent scoring — the differentiator against a bare percentage. */}
+      {/* Transparent scoring — the differentiator against a bare percentage.
+          First thing summary mode drops: it explains the number rather than
+          telling the user what to change. */}
+      {!brief ? (
       <Card>
         <Text style={type.h2}>Why this score</Text>
         <Text style={[type.small, { marginBottom: spacing.md }]}>
@@ -215,6 +289,7 @@ export default function AnalysisDetail() {
           </View>
         ) : null}
       </Card>
+      ) : null}
 
       {/* Ordered advice: cheapest, safest edits first. The three lists this is
           assembled from each tell you something true; the order is the part
@@ -469,6 +544,7 @@ export default function AnalysisDetail() {
       </Card>
 
       {/* Full gap list */}
+      {!brief ? (
       <Card>
         <Text style={type.h2}>Missing terms</Text>
         <Text style={[type.small, { marginBottom: spacing.sm }]}>
@@ -495,6 +571,7 @@ export default function AnalysisDetail() {
             </View>
           ))}
       </Card>
+      ) : null}
 
       <View style={{ height: spacing.xl }} />
     </ScrollView>

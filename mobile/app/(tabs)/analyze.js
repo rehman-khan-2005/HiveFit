@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, ScrollView, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -6,10 +6,11 @@ import * as DocumentPicker from 'expo-document-picker';
 
 import { api } from '../../src/api/client';
 import {
-  Card, Button, Field, Banner, Empty, Loading, ScoreBadge, Chip, ApplyLink,
+  Card, Button, Field, Banner, Empty, Loading, FitBadge, Chip, ApplyLink,
 } from '../../src/components/ui';
 import { PoolDistribution, GapFrequency } from '../../src/components/charts';
-import { colors, spacing, type } from '../../src/theme';
+import { PreferencesPanel, describePreferences } from '../../src/components/Preferences';
+import { colors, spacing, type, fitColor } from '../../src/theme';
 
 export default function AnalyzeScreen() {
   const router = useRouter();
@@ -569,32 +570,97 @@ function JobPicker({
   );
 }
 
+/**
+ * What the comparison found, shown the way this user asked for it.
+ *
+ * Two things changed here after measuring the scoring against real listings.
+ * The badge is relative — "2nd of 12", coloured green or amber — rather than a
+ * percentage, because every real posting scores in the bottom absolute band and
+ * a 0-100 figure invites the user to read a grade the measure cannot support.
+ * And the list can be trimmed, because twelve dense cards is the information
+ * overload the dropdown exists to fix.
+ */
 function Results({ result, router }) {
-  const { comparison, results } = result;
+  const { comparison, results, keywords, scoreReality } = result;
+
+  // Seeded from the response, so the first render is already the user's view.
+  const [prefs, setPrefs] = useState(result.preferences ?? null);
+  const [schema, setSchema] = useState([]);
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getPreferences()
+      .then((loaded) => { if (!cancelled) setSchema(loaded.schema); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const hideBelow = prefs?.hideBelow ?? 'nothing';
+  const showScore = (prefs?.scoreDisplay ?? 'band') === 'percentage';
+  const brief = (prefs?.detailLevel ?? 'full') === 'summary';
+
+  // A single posting carries no fit band, so there is nothing to hide by.
+  const KEEP = { nothing: null, far: ['close', 'near'], near: ['close'] };
+  const allowed = KEEP[hideBelow];
+  const visible = allowed && !showAll
+    ? results.filter((r) => !r.fit || allowed.includes(r.fit.band))
+    : results;
+  const hidden = results.length - visible.length;
+
   return (
     <View style={{ marginTop: spacing.lg }}>
       <Text style={type.h2}>Results</Text>
 
-      <Card style={{ marginTop: spacing.sm }}>
+      <View style={{ marginTop: spacing.sm }}>
+        <PreferencesPanel
+          value={prefs}
+          schema={schema}
+          onChange={setPrefs}
+          summary={describePreferences(prefs, schema)}
+        />
+      </View>
+
+      <Card>
         <Text style={type.h3}>Across the field</Text>
         <Text style={[type.body, { marginTop: spacing.xs }]}>{comparison.interpretation}</Text>
 
-        <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.md }}>
-          <Metric label="Average" value={`${comparison.averageScore}%`} />
-          <Metric label="Best" value={`${comparison.bestScore}%`} />
-          <Metric label="Worst" value={`${comparison.worstScore}%`} />
-        </View>
+        {/* The measurement sections. Hidden in summary mode: they explain the
+            scoring rather than telling the user what to do next. */}
+        {!brief ? (
+          <>
+            <View style={{ flexDirection: 'row', gap: spacing.md, marginTop: spacing.md }}>
+              <Metric label="Average" value={`${comparison.averageScore}%`} />
+              <Metric label="Best" value={`${comparison.bestScore}%`} />
+              <Metric label="Worst" value={`${comparison.worstScore}%`} />
+            </View>
 
-        {/* Where you stand across the pool, at a glance. Absent for a single
-            posting — one bar is not a chart, and the badge already says it. */}
-        {results.length > 1 ? (
-          <View style={{ marginTop: spacing.md }}>
-            <Text style={type.h3}>Score across the pool</Text>
-            <Text style={[type.small, { marginBottom: spacing.sm }]}>
-              Ranked best match first.
-            </Text>
-            <PoolDistribution results={results} average={comparison.averageScore} />
-          </View>
+            {/* What the percentage is worth, next to the percentages. Measured,
+                reproducible, and the reason the badges above are relative. */}
+            {scoreReality ? (
+              <View style={{
+                marginTop: spacing.sm, padding: spacing.sm,
+                backgroundColor: colors.canvas, borderRadius: 8,
+                borderLeftWidth: 3, borderLeftColor: colors.honeyDark,
+              }}>
+                <Text style={[type.small, { color: colors.ink, fontWeight: '600' }]}>
+                  {scoreReality.headline}
+                </Text>
+                <Text style={[type.small, { marginTop: 2 }]}>{scoreReality.measured}</Text>
+                <Text style={[type.small, { marginTop: 2 }]}>{scoreReality.why}</Text>
+              </View>
+            ) : null}
+
+            {results.length > 1 ? (
+              <View style={{ marginTop: spacing.md }}>
+                <Text style={type.h3}>Score across the pool</Text>
+                <Text style={[type.small, { marginBottom: spacing.sm }]}>
+                  Ranked best match first.
+                </Text>
+                <PoolDistribution results={results} average={comparison.averageScore} />
+              </View>
+            ) : null}
+          </>
         ) : null}
 
         {comparison.bestMatch?.url ? (
@@ -608,6 +674,33 @@ function Results({ result, router }) {
               label="Apply to your best match"
               style={{ marginTop: spacing.xs }}
             />
+          </View>
+        ) : null}
+
+        {/* Spellings a recruiter's search box would miss. Kept in summary mode:
+            it is a concrete edit, not a measurement. */}
+        {keywords?.missingSpellings?.length > 0 ? (
+          <View style={{ marginTop: spacing.md }}>
+            <Text style={type.h3}>How these employers spell it</Text>
+            <Text style={[type.small, { marginBottom: spacing.sm }]}>
+              {keywords.summary}
+            </Text>
+            {keywords.missingSpellings.slice(0, 6).map((item) => (
+              <View key={item.skill} style={{
+                flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.xs,
+              }}>
+                <Text style={[type.small, {
+                  width: 44, fontVariant: ['tabular-nums'], color: colors.honeyDark, fontWeight: '700',
+                }]}>
+                  {item.postings}/{keywords.postingsCompared}
+                </Text>
+                <Text style={[type.body, { flex: 1, fontSize: 14 }]}>{item.action}</Text>
+              </View>
+            ))}
+            <Text style={[type.small, { marginTop: 2 }]}>
+              Both spellings belong on the page — the formal one for the search, yours for
+              whoever reads it.
+            </Text>
           </View>
         ) : null}
 
@@ -626,7 +719,7 @@ function Results({ result, router }) {
           </View>
         ) : null}
 
-        {comparison.recurringGaps.length > 0 ? (
+        {!brief && comparison.recurringGaps.length > 0 ? (
           <View style={{ marginTop: spacing.md }}>
             <Text style={type.h3}>Gaps that repeat</Text>
             <Text style={[type.small, { marginBottom: spacing.sm }]}>
@@ -641,22 +734,49 @@ function Results({ result, router }) {
         ) : null}
       </Card>
 
+      {/* A trimmed list says so and offers the rest. Quietly dropping postings
+          the user asked to compare would look like the analysis lost them. */}
+      {hidden > 0 ? (
+        <Pressable onPress={() => setShowAll(true)}>
+          <Text style={[type.small, {
+            color: colors.honeyDark, marginBottom: spacing.sm, textAlign: 'center',
+          }]}>
+            {hidden} weaker match{hidden === 1 ? '' : 'es'} hidden · show {hidden === 1 ? 'it' : 'them'}
+          </Text>
+        </Pressable>
+      ) : null}
+      {showAll && allowed ? (
+        <Pressable onPress={() => setShowAll(false)}>
+          <Text style={[type.small, {
+            color: colors.honeyDark, marginBottom: spacing.sm, textAlign: 'center',
+          }]}>
+            Hide the weaker matches again
+          </Text>
+        </Pressable>
+      ) : null}
+
       {/* Ranked by the server, best match first — the top of this list is
           where the user's afternoon is best spent. */}
-      {results.map((r) => (
+      {visible.map((r) => (
         <Pressable key={r.analysisId} onPress={() => router.push(`/analysis/${r.analysisId}`)}>
           <Card>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
-              <View style={{ alignItems: 'center', width: 28 }}>
-                <Text style={[type.h3, { color: colors.honeyDark }]}>#{r.rank}</Text>
-              </View>
-              <ScoreBadge score={r.score} size="sm" />
+              <FitBadge fit={r.fit} score={r.score} rank={r.rank} showScore={showScore} />
               <View style={{ flex: 1 }}>
                 <Text style={type.h3} numberOfLines={1}>{r.title ?? 'Posting'}</Text>
                 <Text style={[type.small, { fontWeight: '600' }]} numberOfLines={1}>
                   {r.company ?? 'Pasted description'}
                 </Text>
-                <Text style={[type.small, { marginTop: 2 }]} numberOfLines={2}>{r.verdict.message}</Text>
+                {/* The relative reading, which is the honest one. The absolute
+                    verdict stays on the breakdown page with its caveat. */}
+                <Text style={[type.small, {
+                  marginTop: 2, color: fitColor(r.fit?.tone), fontWeight: '600',
+                }]} numberOfLines={1}>
+                  {r.fit ? r.fit.label : r.verdict.band}
+                </Text>
+                <Text style={[type.small, { marginTop: 2 }]} numberOfLines={2}>
+                  {r.fit ? r.fit.message : r.verdict.message}
+                </Text>
 
                 {r.underhighlighted?.length > 0 ? (
                   <Text style={[type.small, { marginTop: 4, color: colors.honeyDark }]}>

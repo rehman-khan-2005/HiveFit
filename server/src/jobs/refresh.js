@@ -27,6 +27,7 @@ import { searchJobs, enabledProviders, hasLiveProvider } from './index.js';
 import {
   upsertPostings, expireStale, freshnessSummary,
   postingsToVerify, markUnavailable, markChecked, prunePostings, backfillCoordinates,
+  recleanDescriptions,
 } from './store.js';
 import { checkListings } from './verify.js';
 import { pool } from '../db/pool.js';
@@ -99,11 +100,17 @@ export async function refreshJobPool({
   // Free — the gazetteer is offline, so this is CPU over rows we already hold.
   const located = await backfillCoordinates();
 
+  // Also free, and also over rows we already hold. Descriptions persisted
+  // before the entity double-escaping was fixed still carry markup, and every
+  // "div" and "quot" in them sits in the TF-IDF vocabulary the scoring is
+  // fitted on. A no-op once the pool is clean.
+  const cleaned = await recleanDescriptions();
+
   const expiry = await expireStale({ ttlHours });
   const pruned = pruneAfterHours > 0 ? await prunePostings({ olderThanHours: pruneAfterHours }) : 0;
   const summary = await freshnessSummary();
 
-  return { sweeps, added, refreshed, ...expiry, verified, located, pruned, summary };
+  return { sweeps, added, refreshed, ...expiry, verified, located, cleaned, pruned, summary };
 }
 
 /** Minimal flag parsing, so the script stays dependency-free. */
@@ -172,6 +179,7 @@ async function main() {
     console.log(`           ${host} blocks automated checks — those listings rely on the staleness TTL`);
   }
   console.log(`located    ${report.located.located} placed on the map of ${report.located.examined} without coordinates`);
+  console.log(`cleaned    ${report.cleaned.cleaned} descriptions stripped of markup (${report.cleaned.charactersRemoved} characters)`);
   console.log(`delisted   ${report.expired}${report.byDeadline > 0 ? ` (${report.byDeadline} past their stated close date)` : ''}`);
   if (report.pruned > 0) console.log(`pruned     ${report.pruned} dead rows deleted`);
   console.log('');

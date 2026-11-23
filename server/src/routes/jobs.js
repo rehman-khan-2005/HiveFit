@@ -5,13 +5,15 @@ import { query } from '../db/pool.js';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncRoute, badRequest, notFound } from '../middleware/error.js';
 import { searchJobs, hasLiveProvider } from '../jobs/index.js';
+import { checkListing } from '../jobs/verify.js';
 import { classifyRole, ROLE_FAMILIES } from '../jobs/roles.js';
 import { classifyField, FIELDS, fieldLabel, fieldQuery } from '../jobs/fields.js';
 import { MAX_POSTINGS_PER_ANALYSIS } from '../config/limits.js';
-import { filterBySkills, filterByLocation, skillsInPool } from '../jobs/filters.js';
+import { filterBySkills, filterByLocation, filterByScope, skillsInPool } from '../jobs/filters.js';
+import { getPreferences } from '../preferences/store.js';
 import {
   upsertPostings, expireStale, freshnessSummary, unavailableIds,
-  postingsInBounds, geoCoverage, searchStored,
+  postingsInBounds, geoCoverage, searchStored, markUnavailable, markChecked,
 } from '../jobs/store.js';
 import { intParam, optionalString } from '../utils/validate.js';
 
@@ -151,6 +153,13 @@ jobRouter.get('/search', asyncRoute(async (req, res) => {
     matching = filterByLocation(matching, 'remote');
   }
 
+  // Where the user said they will work, applied here rather than in the
+  // client so it holds for every screen that reads this endpoint.
+  const preferences = await getPreferences(req.user.id);
+  const beforeScope = matching.length;
+  matching = filterByScope(matching, preferences.locationScope);
+  const outOfScope = beforeScope - matching.length;
+
   res.json({
     provider,
     providers,
@@ -170,6 +179,10 @@ jobRouter.get('/search', asyncRoute(async (req, res) => {
     fieldLabel: field ? fieldLabel(field) : null,
     skills,
     skillMode,
+    // The user's own narrowing, echoed so the interface can say why the list
+    // is shorter than the counts above it rather than looking broken.
+    preferences,
+    outOfScope,
     // What the pool asks for, with how many postings want each.
     skillOptions,
     // How much of the pool can be shown on a map at all.
@@ -231,6 +244,9 @@ jobRouter.get('/map', asyncRoute(async (req, res) => {
   if (field) jobs = jobs.filter((job) => job.field.id === field);
   jobs = filterBySkills(jobs, skills);
 
+  const preferences = await getPreferences(req.user.id);
+  jobs = filterByScope(jobs, preferences.locationScope);
+
   res.json({
     count: jobs.length,
     // At this zoom there are more listings than were returned.
@@ -250,6 +266,62 @@ jobRouter.get('/map', asyncRoute(async (req, res) => {
  */
 jobRouter.get('/freshness', asyncRoute(async (req, res) => {
   res.json({ freshness: await freshnessSummary(), live: hasLiveProvider() });
+}));
+
+/**
+ * POST /api/jobs/:id/check
+ *
+ * Ask the posting's own page whether it is still there, now, for this one
+ * listing. The nightly sweep verifies in bulk on a budget, which is right for
+ * keeping the pool honest and wrong for the moment a user is about to spend an
+ * hour tailoring a resume to a job that closed last week.
+ *
+ * Only a 404, a 410 or an explicit "this position has been filled" counts as
+ * gone. A 403, a 429, a timeout or a 500 means the board would not tell us,
+ * which is reported as unknown — calling a blocked request a dead job would
+ * delete live listings from the pool.
+ */
+jobRouter.post('/:id/check', asyncRoute(async (req, res) => {
+  const id = intParam(req.params.id, 'id');
+  const rows = await query(
+    'SELECT id, title, company, url, unavailable_at, checked_at FROM job_postings WHERE id = ?',
+    [id]
+  );
+  if (rows.length === 0) throw notFound('Job posting not found');
+  const posting = rows[0];
+
+  // Already confirmed gone. Re-checking cannot bring it back — a board
+  // re-serving a dead listing is the thing the lifecycle exists to resist —
+  // so the stored verdict stands.
+  if (posting.unavailable_at) {
+    return res.json({
+      id,
+      status: 'gone',
+      reason: 'already confirmed unavailable',
+      checkedAt: posting.checked_at,
+      confirmedGoneAt: posting.unavailable_at,
+      actionable: false,
+    });
+  }
+
+  const verdict = await checkListing(posting.url);
+
+  if (verdict.status === 'gone') {
+    await markUnavailable([id]);
+  } else {
+    await markChecked([id]);
+  }
+
+  res.json({
+    id,
+    status: verdict.status,
+    reason: verdict.reason,
+    httpStatus: verdict.httpStatus,
+    checkedAt: new Date().toISOString(),
+    // Whether the answer tells the user anything they can act on. An unknown
+    // is not a reassurance, and the interface should not render it as one.
+    actionable: verdict.status === 'gone',
+  });
 }));
 
 jobRouter.get('/:id', asyncRoute(async (req, res) => {

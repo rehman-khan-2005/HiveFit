@@ -1,7 +1,9 @@
 -- HiveFit schema — implements the Entity Relationship Diagram (Figure 5).
 --
--- Entities:  User, Resume, JobPosting, ATSAnalysis, Suggestion, SavedJob
--- Relations: User 1:N Resume, User 1:N SavedJob, Resume 1:N ATSAnalysis,
+-- Entities:  User, Resume, JobPosting, ATSAnalysis, Suggestion, SavedJob,
+--            UserPreference
+-- Relations: User 1:1 UserPreference, User 1:N Resume, User 1:N SavedJob,
+--            Resume 1:N ATSAnalysis,
 --            JobPosting 1:N ATSAnalysis, JobPosting 1:N SavedJob,
 --            ATSAnalysis 1:N Suggestion.
 --
@@ -15,6 +17,23 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   full_name     VARCHAR(120),
   created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Display preferences. One row per user, created on first change.
+--
+-- A seventh entity on the ERD, 1:1 with User. Kept out of the users table
+-- because it is presentation state rather than identity: it is read on every
+-- analysis render and rewritten whenever the user touches the dropdown, and
+-- mixing that traffic into the row that holds the password hash is asking for
+-- an accident.
+CREATE TABLE IF NOT EXISTS user_preferences (
+  user_id        INT UNSIGNED PRIMARY KEY,
+  score_display  VARCHAR(16) NOT NULL DEFAULT 'band',
+  hide_below     VARCHAR(16) NOT NULL DEFAULT 'nothing',
+  location_scope VARCHAR(16) NOT NULL DEFAULT 'any',
+  detail_level   VARCHAR(16) NOT NULL DEFAULT 'full',
+  updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_preferences_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS resumes (

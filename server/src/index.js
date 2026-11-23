@@ -10,6 +10,7 @@ import { analysisRouter } from './routes/analyses.js';
 import { suggestionRouter } from './routes/suggestions.js';
 import { jobRouter } from './routes/jobs.js';
 import { savedRouter } from './routes/saved.js';
+import { preferenceRouter } from './routes/preferences.js';
 
 export function createApp() {
   const app = express();
@@ -34,6 +35,7 @@ export function createApp() {
         '3.0 suggestions': ['POST /api/suggestions', 'PATCH /api/suggestions/:id'],
         '4.0 jobs': ['GET /api/jobs/search', 'GET /api/jobs/:id'],
         '5.0 tracker': ['GET/POST /api/saved-jobs', 'PATCH/DELETE /api/saved-jobs/:id'],
+        'preferences': ['GET /api/preferences', 'PATCH /api/preferences'],
       },
     });
   });
@@ -61,6 +63,8 @@ export function createApp() {
   app.use('/api/suggestions', suggestionRouter); // 3.0 AI Recommendations
   app.use('/api/jobs', jobRouter);           // 4.0 Job Search
   app.use('/api/saved-jobs', savedRouter);   // 5.0 Application Tracker
+  // Cross-cutting: what the user wants to see of any of the above.
+  app.use('/api/preferences', preferenceRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

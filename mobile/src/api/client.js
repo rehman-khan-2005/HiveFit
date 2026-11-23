@@ -131,6 +131,10 @@ export const api = {
       + (refresh ? '&refresh=1' : '')),
   // How the pool has moved lately, without running a search to find out.
   jobFreshness: () => request('/jobs/freshness'),
+  // Ask one posting's own page whether it is still there, right now. The
+  // nightly sweep checks in bulk; this is for the moment before the user
+  // spends an hour tailoring to it.
+  checkJob: (id) => request(`/jobs/${id}/check`, { method: 'POST' }),
   // Postings inside a map viewport. bbox is Leaflet's "minLng,minLat,maxLng,maxLat".
   jobsInBounds: (bbox, field, skills) =>
     request(`/jobs/map?bbox=${encodeURIComponent(bbox)}`
@@ -145,4 +149,8 @@ export const api = {
   deleteSavedJob: (id) => request(`/saved-jobs/${id}`, { method: 'DELETE' }),
 
   health: () => request('/health', { auth: false }),
+  // Display preferences — stored on the account, not the device, because the
+  // same user opens this on a laptop and a phone.
+  getPreferences: () => request('/preferences'),
+  savePreferences: (changes) => request('/preferences', { method: 'PATCH', body: changes }),
 };

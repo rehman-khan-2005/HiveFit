@@ -253,6 +253,79 @@ export function locate(location, area = []) {
   return null;
 }
 
+// The states and territories that make up "the US" for filtering purposes.
+//
+// Explicit, rather than derived from REGIONS or STATE_ABBR, because neither of
+// those is US-only: REGIONS carries Ontario and British Columbia, and
+// STATE_ABBR maps "ON" to Ontario alongside the state codes. Deriving a
+// domestic set from either is how "Toronto, ON" ends up classed as domestic.
+const US_STATES = new Set([
+  'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado',
+  'connecticut', 'delaware', 'florida', 'georgia', 'hawaii', 'idaho',
+  'illinois', 'indiana', 'iowa', 'kansas', 'kentucky', 'louisiana', 'maine',
+  'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
+  'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey',
+  'new mexico', 'new york', 'new york state', 'north carolina', 'north dakota',
+  'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'rhode island',
+  'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont',
+  'virginia', 'washington', 'washington state', 'west virginia', 'wisconsin',
+  'wyoming', 'district of columbia', 'puerto rico',
+]);
+
+// The two-letter codes, which is how a board usually writes it. Only the ones
+// that are unambiguously a US state: "ON" is Ontario, not a state, and the
+// Canadian codes that collide are simply absent here.
+const US_STATE_CODES = new Set([
+  'al', 'ak', 'az', 'ar', 'ca', 'co', 'ct', 'de', 'fl', 'ga', 'hi', 'id',
+  'il', 'in', 'ia', 'ks', 'ky', 'la', 'me', 'md', 'ma', 'mi', 'mn', 'ms',
+  'mo', 'mt', 'ne', 'nv', 'nh', 'nj', 'nm', 'ny', 'nc', 'nd', 'oh', 'ok',
+  'or', 'pa', 'ri', 'sc', 'sd', 'tn', 'tx', 'ut', 'vt', 'va', 'wa', 'wv',
+  'wi', 'wy', 'dc', 'pr',
+]);
+
+const US_NAMES = new Set(['us', 'usa', 'u s', 'u s a', 'united states', 'united states of america']);
+
+/**
+ * Which part of the world a posting's location is in.
+ *
+ * 'us' | 'other' | 'remote' | 'unknown'
+ *
+ * Conservative about 'other', and conservative about 'us'. A bare city name
+ * decides nothing: there is a London in Ontario and a Paris in Texas, and the
+ * gazetteer's city table is not US-only, so a city match cannot stand in for a
+ * country. Anything that names neither a country nor a state reads as
+ * 'unknown'.
+ *
+ * That bias is deliberate. A user who asks for US-only roles would rather see
+ * a posting whose location we could not parse than silently lose it, so only a
+ * confident 'other' is ever filtered out.
+ */
+export function locationScope(location) {
+  const raw = String(location ?? '').toLowerCase().trim();
+  if (!raw) return 'unknown';
+  if (/\b(remote|work from home|wfh|telecommute|distributed|anywhere)\b/.test(raw)) return 'remote';
+
+  const parts = raw
+    .split(/[,/|()]+/)
+    .map((part) => part.replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  // Domestic first: a named state settles it, and most US postings name one.
+  for (const part of parts) {
+    if (US_NAMES.has(part)) return 'us';
+    if (US_STATES.has(part)) return 'us';
+    if (part.length === 2 && US_STATE_CODES.has(part)) return 'us';
+  }
+
+  // Then a country, using only spellings that cannot be a state code.
+  for (const part of parts) {
+    if (part.length <= 2) continue;
+    if (part in COUNTRIES) return 'other';
+  }
+
+  return 'unknown';
+}
+
 /** How many places the bundled gazetteer knows, for the README to stay honest. */
 export function gazetteerSize() {
   return {

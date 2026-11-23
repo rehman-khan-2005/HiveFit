@@ -11,6 +11,7 @@
 import { query, execute } from '../db/pool.js';
 import { config } from '../config/env.js';
 import { locate } from './gazetteer.js';
+import { stripHtml } from './shared.js';
 
 // Sources that are never expired.
 //
@@ -216,6 +217,42 @@ export async function backfillCoordinates({ limit = 1000 } = {}) {
   }
 
   return { examined: rows.length, located, unresolved };
+}
+
+/**
+ * Re-run stripHtml over stored descriptions.
+ *
+ * Needed because descriptions were persisted through a stripper that decoded
+ * entities after removing tags, so the double-escaped markup Greenhouse and
+ * The Muse serve survived into the text the analysis reads. The postings are
+ * already in the pool, so fixing the stripper alone fixes nothing that has
+ * been stored — and the vocabulary is fitted across the whole corpus, so the
+ * markup in those rows skews the term weights for every other posting too.
+ *
+ * Only rows the stripper actually changes are written, so this is safe to run
+ * on every sweep and becomes a no-op once the pool is clean.
+ */
+export async function recleanDescriptions({ limit = 5000 } = {}) {
+  const rows = await query(
+    `SELECT id, description FROM job_postings
+      WHERE description LIKE '%&lt;%' OR description LIKE '%&quot;%'
+         OR description LIKE '%&amp;%' OR description LIKE '%<%'
+      LIMIT ?`,
+    [Number(limit)]
+  );
+
+  let cleaned = 0;
+  let removed = 0;
+
+  for (const row of rows) {
+    const next = stripHtml(row.description);
+    if (next === row.description) continue;
+    await execute('UPDATE job_postings SET description = ? WHERE id = ?', [next, row.id]);
+    cleaned += 1;
+    removed += row.description.length - next.length;
+  }
+
+  return { examined: rows.length, cleaned, charactersRemoved: removed };
 }
 
 /** How much of the pool can be mapped at all, for the UI to be honest about it. */

@@ -10,7 +10,9 @@ import { TfidfVectorizer } from './tfidf.js';
 import { compatibilityScore, requirementCoverage } from './similarity.js';
 import { bm25Score } from './bm25.js';
 import { isKnownSkill } from './categories.js';
-import { analyzeKeywordGap } from './keywordGap.js';
+import { analyzeKeywordGap, LEANED_ON } from './keywordGap.js';
+import { bandByFit, fitSummary } from './fit.js';
+import { keywordVisibility, summarizeKeywordVisibility } from './keywords.js';
 import { findUnderhighlighted, summarizeUnderhighlighted } from './highlight.js';
 import { parseResume } from './parse.js';
 
@@ -76,6 +78,35 @@ export function scoreGuide() {
 }
 
 /**
+ * Coverage of the terms a posting leans on, rather than every term it names.
+ *
+ * This exists because the headline score reads far lower on real listings than
+ * on the short reference postings it was calibrated against, and for a
+ * structural reason rather than a bug: a real posting names forty-odd
+ * recognized skills — the team's whole stack, the nice-to-haves, the things
+ * the other team uses — and no single resume covers most of them. Dividing by
+ * all forty means a genuinely strong candidate reads as a third of a match.
+ *
+ * So the denominator here is the terms the posting actually emphasises, which
+ * the gap analysis already identifies by relative weight for its critical and
+ * important tiers. Same weighting, same threshold, smaller denominator.
+ */
+function coreCoverage(jobVector, resumeTermSet) {
+  let heaviest = 0;
+  for (const [term, weight] of jobVector) {
+    if (isKnownSkill(term) && weight > heaviest) heaviest = weight;
+  }
+  if (heaviest === 0) return 0;
+
+  const floor = heaviest * LEANED_ON;
+  return requirementCoverage(
+    jobVector,
+    resumeTermSet,
+    (term) => isKnownSkill(term) && jobVector.get(term) >= floor
+  );
+}
+
+/**
  * Score one resume against one or more job postings.
  *
  * @param {object} args
@@ -125,6 +156,7 @@ export function analyzeResume({ resumeText, jobs, backgroundCorpus = [] }) {
     // report's Figure 4 pipeline, which specifies cosine at stage 2.4.
     const score = requirementCoverage(jobVector, resumeTermSet, isKnownSkill);
     const overallCoverage = requirementCoverage(jobVector, resumeTermSet);
+    const core = coreCoverage(jobVector, resumeTermSet);
     const similarity = compatibilityScore(resumeVector, jobVector);
 
     // Reported alongside, not instead of. BM25 is the standard retrieval
@@ -167,6 +199,7 @@ export function analyzeResume({ resumeText, jobs, backgroundCorpus = [] }) {
       url: job.url ?? null,
       score,
       overallCoverage,
+      core,
       similarity,
       retrieval,
       verdict: verdictFor(score),
@@ -180,7 +213,9 @@ export function analyzeResume({ resumeText, jobs, backgroundCorpus = [] }) {
 
   // Ordered before anything downstream sees it, so the ranking holds in the
   // API response, the persisted rows, and the UI without each one re-sorting.
-  const ranked = rankResults(results);
+  // Banded after ranking, because a fit band is a statement about this set and
+  // cannot be computed one posting at a time.
+  const ranked = bandByFit(rankResults(results));
 
   return {
     resume: {
@@ -202,6 +237,18 @@ export function analyzeResume({ resumeText, jobs, backgroundCorpus = [] }) {
     },
     results: ranked,
     comparison: summarize(ranked),
+    // Whether a literal keyword search can find this resume at all. Computed
+    // across the whole compared set rather than per posting: "most of these
+    // employers write it this way" is the finding, and one posting cannot
+    // support it.
+    keywords: (() => {
+      const visibility = keywordVisibility({
+        resumeTokens: resume.tokens,
+        resumeSurface: resume.surface,
+        jobDocs,
+      });
+      return { ...visibility, summary: summarizeKeywordVisibility(visibility) };
+    })(),
   };
 }
 
@@ -301,6 +348,9 @@ function summarize(results) {
     recurringGaps,
     recurringUnderhighlighted,
     interpretation: interpret(mean, results.length),
+    // How this comparison split across the relative bands, so the interface
+    // can offer "hide the weakest" against real counts.
+    fitBands: fitSummary(results),
   };
 }
 

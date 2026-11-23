@@ -27,7 +27,27 @@ export function bandColor(band) {
   return colors[band] ?? colors.muted;
 }
 
-/** Colour for a raw 0-100 score, matching the API's band thresholds. */
+/**
+ * Colour for a relative fit tone from the API.
+ *
+ * This is the primary scale now. The absolute one below is kept for the
+ * breakdown page, where the raw figure is shown on purpose, but it is not what
+ * a list of postings is coloured by: measured against real listings, every one
+ * of them lands in the bottom absolute band, so an absolute scale paints the
+ * whole screen red and tells the user nothing.
+ */
+export function fitColor(tone) {
+  if (tone === 'green') return colors.strong;
+  if (tone === 'amber') return colors.moderate;
+  return colors.muted;
+}
+
+/**
+ * Colour for a raw 0-100 score, matching the API's band thresholds.
+ *
+ * Only for places that deliberately show the absolute number. See fitColor
+ * for why a list is not coloured this way.
+ */
 export function scoreColor(score) {
   // Thresholds match verdictFor() in server/src/nlp/analyze.js. If those move,
   // these move with them, or a colour stops meaning what the band says.

@@ -6,6 +6,7 @@ import { useFocusEffect } from 'expo-router';
 import { api } from '../../src/api/client';
 import { Card, Button, Field, Banner, Empty, Loading, ApplyLink, Chip } from '../../src/components/ui';
 import { JobMap } from '../../src/components/JobMap';
+import { PreferencesPanel, usePreferences, describePreferences } from '../../src/components/Preferences';
 import { colors, spacing, type } from '../../src/theme';
 
 export default function JobsScreen() {
@@ -27,6 +28,10 @@ export default function JobsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [skillOptions, setSkillOptions] = useState([]);
   const [skillFilter, setSkillFilter] = useState([]);
+  const [outOfScope, setOutOfScope] = useState(0);
+  // The location preference is applied server-side, so changing it here has to
+  // re-run the search rather than just re-render.
+  const { value: prefs, schema: prefSchema, setValue: setPrefs } = usePreferences();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [savedIds, setSavedIds] = useState(new Set());
@@ -50,6 +55,7 @@ export default function JobsScreen() {
       setCoverage(result.coverage ?? null);
       setSource(result.source ?? null);
       setSkillOptions(result.skillOptions ?? []);
+      setOutOfScope(result.outOfScope ?? 0);
       setSavedIds(new Set(saved.savedJobs.map((s) => s.job_posting_id)));
     } catch (err) {
       setError(err.message);
@@ -109,6 +115,24 @@ export default function JobsScreen() {
         ))}
 
         {error ? <Banner tone="error">{error}</Banner> : null}
+
+        <PreferencesPanel
+          value={prefs}
+          schema={prefSchema}
+          onChange={(next) => {
+            setPrefs(next);
+            // Applied by the server, so the list has to be fetched again.
+            search(query, location, field, false, skillFilter);
+          }}
+          summary={describePreferences(prefs, prefSchema)}
+        />
+
+        {outOfScope > 0 ? (
+          <Text style={[type.small, { marginBottom: spacing.sm }]}>
+            {outOfScope} posting{outOfScope === 1 ? '' : 's'} hidden by your location
+            preference, not by the search.
+          </Text>
+        ) : null}
 
         <Card>
           <Field label="What" value={query} onChangeText={setQuery} placeholder="software engineer" />

@@ -24,6 +24,7 @@ import { analyzeResume } from './analyze.js';
 
 export const METRICS = [
   { key: 'score', label: 'Requirement coverage (headline)' },
+  { key: 'core', label: 'Leaned-on coverage' },
   { key: 'retrieval', label: 'BM25 retrieval' },
   { key: 'similarity', label: 'TF-IDF cosine' },
 ];

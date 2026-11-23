@@ -9,6 +9,10 @@ This is the Phase 4 implementation of the system designed in
 `HiveFit_SemesterOne_FinalReport`. It implements all five Level 1 DFD
 processes, the ERD, and the four differentiators the report argues for.
 
+**Project record:** [`docs/`](docs/) holds the timeline, the advisor meeting
+notes, and the measured findings — the source material for the report, the
+slides and the public site. Start at [docs/timeline.md](docs/timeline.md).
+
 ---
 
 ## Quick start
@@ -235,6 +239,68 @@ ignored.
 The picker narrows on four: field (which re-queries the board), specialty,
 required skills, and free text for whatever the taxonomy misses.
 
+**You choose what you see.** The analysis page had grown to nine sections, and
+the advisor's reaction on 23 November was that a user meeting it for the first
+time would be overwhelmed. Four preferences, in one dropdown on both the
+results and the job list:
+
+- **Match strength** &mdash; colour only, or colour and the number. Colour is
+  the default, for the measured reason in [Scoring](#scoring).
+- **Hide weak matches** &mdash; show everything, drop the grey band, or the
+  closest only. A trimmed list says how many it hid and offers them back; a
+  list that quietly drops postings the user asked to compare looks like the
+  analysis lost them.
+- **Where you will work** &mdash; anywhere, United States only, or remote only.
+  Applied server-side, so it holds for the list, the map and the picker rather
+  than being re-implemented per screen.
+- **How much detail** &mdash; everything, or just what to do. Summary mode keeps
+  the tailoring steps and the buried skills and drops the sections that explain
+  the measurement.
+
+Stored on the account rather than the device, because the same user opens this
+on a laptop and a phone and a choice that applies to one of them is not a
+preference. The option list is defined once on the server, validated against,
+*and* sent to the client, which builds its dropdown from it &mdash; a hardcoded
+list in the app is how a client starts offering a choice the server rejects.
+A value the server does not offer is reported in `ignored` rather than failing
+the request, so an older build still saves the choices it understands.
+&rarr; `server/src/preferences/options.js`, `mobile/src/components/Preferences.js`
+
+**How these employers spell it.** An ATS keyword search is literal. A recruiter
+filtering a stack of applications types "Kubernetes" into a box, and a resume
+that says "k8s" is not in the result set &mdash; nobody involved ever finds out
+why. Stemming cannot close that gap, because "k8s" and "Kubernetes" are not
+inflections of one word, so the equivalences are stated in an explicit table of
+33 skill groups.
+
+The analysis then reports, across the compared postings, which of the user's own
+skills are spelled differently from the way these employers write them: *"3 of
+the 3 postings write Kubernetes as 'Kubernetes'. Your resume says 'k8s', so a
+recruiter searching the formal spelling does not find you."*
+
+Two restrictions keep it honest. It only fires on skills the resume already
+claims &mdash; telling someone to "also write Kubernetes" when they have never
+used it is advice to lie, and that is a gap, which the gap analysis already
+covers. And the advice is always **additive**: both spellings belong on the
+page, the formal one for the search and the user's own for whoever reads it. It
+never suggests a replacement.
+&rarr; `server/src/nlp/aliases.js`, `server/src/nlp/keywords.js`
+
+**Is this job still open?** The nightly sweep verifies listings in bulk on a
+budget, which keeps the pool honest and says nothing about whether one
+particular listing survived the week. `POST /api/jobs/:id/check` asks that
+posting's own page, on demand, at the moment it matters &mdash; the user is
+about to spend an hour tailoring a resume to it.
+
+The same conservative rule as the sweep: only a 404, a 410 or an explicit "this
+position has been filled" counts as gone. A 403, a 429, a timeout or a 500
+means the board would not tell us, which is reported as *unknown* and rendered
+as such. An inconclusive check is not reassurance, and calling a blocked
+request a dead job would delete live listings from the pool. A posting already
+confirmed gone is not re-checked, because a board re-serving a dead listing is
+the exact thing the lifecycle exists to resist.
+&rarr; `server/src/jobs/verify.js`, `server/src/routes/jobs.js`
+
 **Browse by area on a map.** The Jobs tab has a List/Map toggle. Pan and zoom
 to a region, tap a pin, and apply from it. Pins are grouped by location, since
 city-level coordinates mean every job in Seattle shares one point and an
@@ -454,42 +520,119 @@ every analysis and are shown in the UI, so the scoring can be checked rather
 than believed.
 → `server/src/nlp/bm25.js`, `server/src/nlp/calibration.js`
 
-### Band thresholds, and a measured problem with them
+### The percentage ranks postings. It does not grade them.
 
-Bands were set with the advisor on 12 November: **80 and above strong, 60&ndash;80
-decent with gaps worth preparing for, 40&ndash;60 partial, below 40 weak.** A perfect
-100 stays reachable, because a resume that genuinely covers every requirement has
-earned it. Every band ships its own interpretation and an instruction, returned
-with the analysis as `scoreGuide()` so the legend and the thresholds cannot drift
-apart.
+Bands were set with the advisor on 12 November: 80 and above strong, 60&ndash;80
+decent, 40&ndash;60 partial, below 40 weak. `npm run calibrate -- --live 80`
+scores the reference resume against real stored postings rather than the
+purpose-written ladder, and found that every real listing lands in the bottom
+band. The 23 November meeting then asked for a 50% cutoff &mdash; "anything
+below 50% we won't see" &mdash; which with those numbers hides the entire list.
 
-`npm run calibrate -- --live 80` scores the reference resume against real stored
-postings rather than the purpose-written ladder. The two distributions are not
-close:
+So the threshold was not moved. Three candidate fixes were measured first.
+
+**Score only the terms the posting leans on.** The fix proposed at the previous
+meeting, implemented as `core` in `analyze.js` and reported by `npm run
+calibrate` alongside the headline. The gap analysis already sorts terms into
+critical, important and minor tiers by weight relative to the posting's
+heaviest term, so the denominator shrinks to the emphasised terms with no new
+machinery. On the reference ladder it is *identical* to the headline &mdash;
+those postings are short enough that every recognized skill in them is already
+a leaned-on one &mdash; so it costs nothing in spread, margin or ordering. On
+real listings it moves the median by a point:
 
 ```
-Against 80 real postings from the stored pool
-  min 0.0   median 9.8   p90 25.8   max 42.1
-
-  80 and above  strong      0    0%
-  60-80         moderate    0    0%
-  40-60         weak        2    3%
-  0-40          poor       78   98%
+                                           median    p90     max
+Requirement coverage (headline)              10.9    19.1    34.4
+Leaned-on coverage                            9.5    25.6    44.5
 ```
 
-The ladder's postings are short and purpose-written, so a resume covering the
-requirements scores near 90. Real postings run past 150 terms, including a great
-deal of role and soft-skill vocabulary, and no resume covers most of them. The
-headline score measures coverage of a posting's whole recognized-skill space, so
-on real listings it sits in single digits &mdash; which means these thresholds
-report "weak match" for almost everything a user will actually see.
+**Tighten the threshold further.** Sweeping it turns the score into noise
+rather than lifting it. The denominator collapses to a handful of terms and the
+result becomes an all-or-nothing flip:
 
-**This is unresolved and needs a decision, not a rescale.** Moving the
-thresholds down to fit the data would make the bands meaningless; the honest fix
-is to score against the terms a posting actually leans on rather than every term
-it contains, since `importance` tiers are already computed per term in
-`keywordGap.js`. That changes the headline figure and every score the report
-cites, so it belongs in a conversation rather than a commit.
+```
+relative-weight floor   median terms in denominator   median score   max score
+0.00                                             32           10.9        34.4
+0.45                                              9            9.4        54.2
+0.60                                              4            0.0       100.0
+0.75                                              2            0.0       100.0
+```
+
+**Count requirements met instead of weighting them.** "Meets 6 of 9" is more
+interpretable than a percentage, so it was worth measuring. On real postings it
+runs 1&ndash;7%, worse than the headline, and it mis-orders the reference ladder
+(29.4% for the same-field posting against 31.3% for the adjacent role).
+
+The conclusion is that there is no threshold to move and no denominator to
+pick. **A real posting names 150 to 400 terms** &mdash; the team's whole stack,
+the nice-to-haves, the next team's tools &mdash; and no single resume covers
+most of them. The ceiling is a property of job postings, not of the resume or
+of the formula.
+
+What the number *can* do is order a set, which it does well: on the labelled
+ladder it separates tiers by 24 points in the correct order, where cosine
+mis-ranks them outright. That is also the question the user is actually asking
+&mdash; of the twelve jobs I picked, which deserve my afternoon?
+
+So postings are banded **relative to the set being compared**, which is what
+the 23 November meeting suggested independently ("maybe not even show
+percentage, only show green jobs or orange jobs"):
+
+- 80% or more of the set's best score &rarr; green, "Closest match"
+- 50% or more &rarr; amber, "Worth tailoring"
+- below that &rarr; grey, "Weakest here"
+
+The wording is relative on purpose. "2nd of 12" and "closest of the 12 you
+compared" are true whatever the absolute numbers are, where "18 / 100" invites
+a reading the measure cannot support. A single posting gets **no** band, since
+calling it the closest match of one is a tautology dressed as a finding, and a
+set that scores all zeros gets no winner invented for it.
+
+The absolute figure is still computed, still returned, and still shown on the
+breakdown page for the report &mdash; next to `scoreReality`, which ships the
+measurement and the command that reproduces it so the caveat cannot drift away
+from the number it qualifies.
+&rarr; `server/src/nlp/fit.js`, `server/tests/fit.test.js`
+
+### A data-quality bug worth more than any of the above
+
+While measuring the above, two problems with the pool turned out to matter more
+than the formula.
+
+**Descriptions were storing their own markup.** `stripHtml` decoded HTML
+entities *after* stripping tags. Greenhouse and The Muse serve descriptions
+escaped twice &mdash; the markup arrives as `&lt;div class=&quot;intro&quot;&gt;`
+&mdash; so decoding turned the entities into tags only after the tag stripper
+had already run, and the markup was persisted as if it were prose. 268 stored
+postings carried about 1,300 characters of it each. Every `div`, `class`,
+`quot`, `span` and `style` was in the TF-IDF vocabulary, which is fitted across
+the whole corpus, so markup in those rows shifted the term weights used to
+score every *other* posting too. Fixed by decoding and stripping repeatedly
+until the text stops changing; `recleanDescriptions()` repairs what is already
+stored and runs on every sweep, a no-op once the pool is clean.
+&rarr; `server/tests/descriptions.test.js`
+
+**Three quarters of the pool has no description to score.** Adzuna's search API
+returns a description truncated to 500 characters, and Adzuna is 1,999 of the
+2,695 stored postings. Scored by source:
+
+```
+source        n   median len   median score   max score
+adzuna     1999          500            0.0       100.0
+amazon      319         5920            9.4        31.4
+greenhouse  267         5718           10.4        33.8
+muse          9         5476            7.2        25.3
+```
+
+On a 500-character snippet the denominator is a handful of terms, so the score
+is a coin flip between 0 and 100 rather than a measurement &mdash; which is the
+single largest reason the headline figure looks the way it does. The full text
+is only on the posting's own page, which the source audit
+(`npm run audit:sources`) records Adzuna's terms as forbidding us to collect.
+This is a known limitation of the data, not something the scoring can fix, and
+it is the strongest argument for weighting the first-party boards more heavily
+than the aggregator.
 
 ### Not applicable is not 100%
 
@@ -563,15 +706,17 @@ mysql -u root -p -e "SELECT VERSION();"
 ## Testing
 
 ```bash
-npm test          # 182 unit tests, no database required
-npm run smoke     # 67 checks end-to-end against a running server + database
+npm test          # 236 unit tests, no database required
+npm run smoke     # 95 checks end-to-end against a running server + database
 ```
 
 The unit tests cover the NLP pipeline (stemming, tokenizing, TF-IDF, cosine,
 coverage, gap analysis, bullet extraction), the scoring calibration, posting
-ranking, the highlight analysis, per-bullet target ranking, the job providers
-and their field and role classification, the listing verifier's refusal to call
-a blocked request a dead job, and the honest-AI constraint. They need no database, no API
+ranking, the relative fit bands, the highlight analysis, keyword-spelling
+visibility, per-bullet target ranking, the job providers and their field and
+role classification, description cleaning, location-scope classification, the
+display-preference option list, the listing verifier's refusal to call a
+blocked request a dead job, and the honest-AI constraint. They need no database, no API
 key, and no network — provider responses are stubbed, and credentials are
 blanked inside the tests so a machine with real Adzuna keys and one without
 behave identically.
@@ -653,7 +798,7 @@ are recorded here rather than guessed at:
 |---|---|
 | Frontend | React Native (Expo SDK 57, expo-router) — iOS, Android, web |
 | Backend | Node.js, Express 5 |
-| Database | MySQL 8 (`mysql2`, pooled, parameterized) |
+| Database | MySQL 8 (`mysql2`, pooled, parameterized) &mdash; 7 tables |
 | NLP | Hand-written TF-IDF, cosine similarity, Porter stemmer — no ML dependency |
 | Job data | Adzuna (primary), bundled fixtures (default) |
 | Auth | JWT + bcrypt |
@@ -674,13 +819,18 @@ server/
     middleware/ auth (JWT + bcrypt), error handling
     nlp/        DFD 2.1-2.5 — one file per sub-process, plus
                 evidence/highlight (skills held but not demonstrated),
+                aliases/keywords (spellings a recruiter search would miss),
+                fit (relative bands, because absolute ones were measured
+                and found unreachable),
                 bm25 + calibration (scoring, measured against alternatives)
     ai/         honest suggestion logic + rewrite providers
     jobs/       Adzuna / Amazon / Greenhouse / Muse clients, fixture corpus,
                 unified adapter, field+role taxonomy, skill & location filters,
                 offline gazetteer, listing lifecycle, liveness verifier,
                 refresh sweep, source policy audit
-    routes/     one router per DFD Level 1 process
+    preferences/ what the user wants to see, defined once and validated
+                 against the same list the client builds its dropdown from
+    routes/     one router per DFD Level 1 process, plus preferences
   tests/        unit tests + end-to-end smoke script
 mobile/
   app/          expo-router screens (auth, tabs, analysis detail)
