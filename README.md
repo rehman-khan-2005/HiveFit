@@ -22,10 +22,13 @@ npm run db:setup                  # creates the database and applies schema.sql
 npm run db:seed                   # demo account + 15 sample job postings
 
 npm run calibrate                 # scoring methodology, measured
+npm run calibrate -- --live 80     # score spread over real stored postings
 npm run audit:sources             # what each job site permits
 
 npm run dev                       # terminal 1 — API on http://localhost:4000
-npm run mobile                    # terminal 2 — Expo; press w for web
+npm run mobile                    # terminal 2 — Expo; press w for web,
+                                  # i for iOS, a for Android, or scan the
+                                  # QR code with Expo Go on a phone
 
 npm run jobs:refresh              # optional — sweep the live boards and
                                   # age out postings that have come down
@@ -34,7 +37,25 @@ npm run jobs:refresh              # optional — sweep the live boards and
 **These are two separate servers.** `localhost:4000` is the API and serves JSON
 only — opening it in a browser gives you an endpoint list, not the app. The
 interface is the Expo app, usually `http://localhost:8081` after pressing `w`.
-The mobile app reads the API address from `apiBaseUrl` in `mobile/app.json`.
+
+**On a phone, `localhost` is the phone.** The API address comes from
+`apiBaseUrl` in `mobile/app.json`, which is correct on a laptop and useless on
+a handset: the request leaves for port 4000 on the phone, where nothing is
+listening. So on iOS and Android the app substitutes the machine serving the
+JS bundle, which Expo already reports — the device has to reach that machine
+for the bundle, so the same address reaches the API. Nothing to configure, and
+no looking up your own IP when the campus network changes it.
+
+Two things still have to be true: the phone and the laptop are on the same
+network, and the laptop firewall is not blocking port 4000. To point a build
+somewhere else entirely — a deployed API, a tunnel — set `EXPO_PUBLIC_API_URL`,
+which overrides all of the above:
+
+```bash
+EXPO_PUBLIC_API_URL=https://your-api.example.com/api npm run mobile
+```
+
+→ `mobile/src/api/apiBase.js`, `mobile/tests/apiBase.test.js`
 
 Demo login after seeding: `demo@hivefit.app` / `hivefit-demo`
 
@@ -222,17 +243,30 @@ ungrouped map is one pin hiding forty.
 Three decisions worth knowing:
 
 - **Leaflet and OpenStreetMap, not Google Maps.** `react-native-maps` has no
-  web renderer and the web portal is what gets demoed; the Google Maps
-  JavaScript API needs a billing account with a card on file. OSM tiles need
-  neither and give real pan and zoom. Leaflet is loaded from a CDN at runtime,
-  so `package.json` is untouched and the native build does not carry a library
-  it cannot use — on device the map shows a "use the web build" note and the
-  list still works.
+  web renderer and the web portal is also demoed; the Google Maps JavaScript
+  API needs a billing account with a card on file. OSM tiles need neither and
+  give real pan and zoom. Leaflet is loaded from a CDN at runtime, so
+  `package.json` carries no map library.
+- **One map, two mounts.** On web, `react-native-web` renders a `View` as a
+  `div`, so Leaflet mounts into the ref directly. On iOS and Android the same
+  Leaflet calls run inside a `react-native-webview`, which is why the pins,
+  the grouping and the tile source are identical on a phone and in a browser.
+  Clustering, the pin badge and the tooltip text are computed once in React and
+  handed to whichever mount is active — two copies of that logic would drift,
+  and the map is the one screen where both platforms are meant to agree about
+  what is where. The WebView is sent group keys, never postings, and reports
+  taps and viewport changes back the same way.
 - **Coordinates are mostly free.** Adzuna returns real latitude and longitude.
   Amazon and Greenhouse return a city string, which an offline bundled
   gazetteer resolves (190 cities, 59 regions, 16 countries) — no geocoding API,
   no key, no rate limit. Anything it cannot resolve stays off the map and in
   the list, because a pin in the wrong city is worse than no pin.
+- **A city-only listing pins to the business district.** "New York, NY" lands
+  in Midtown rather than at City Hall, because a listing that names only a city
+  has told us where the work is to within a few miles, and the useful centre of
+  that area is where the jobs are. Researching each employer's office address
+  would be guesswork presented as precision, so the map says what its pins mean
+  instead.
 - **Remote roles get no pin, deliberately.** Pinning them to a country centroid
   would invent a cluster in the middle of Kansas that no job is actually in.
   The map says so, and the count tells you how much of the pool is mappable.
@@ -243,6 +277,40 @@ is moving around jobs already found rather than searching again. The viewport's
 field and skill filters carry over, and when a viewport holds more listings
 than the map will draw the response says so rather than truncating silently.
 → `server/src/jobs/gazetteer.js`, `mobile/src/components/JobMap.js`
+
+**The job boards are only called when the user means it.** Asking three
+providers on every page load spends API quota on someone who is scrolling. The
+search endpoint reads the stored pool by default and calls a board only when the
+user does something that means it &mdash; typing a query, choosing a field,
+pressing Refresh &mdash; or when the pool comes back too thin to be useful,
+which is what makes a first run work. `refresh=0` forbids it outright. Measured:
+
+| Request | Served from | Boards called | Latency |
+|---|---|---|---|
+| Opening the tab | stored pool | none | 77 ms |
+| `refresh=1` | providers | yes | 1418 ms |
+| Thin pool, no flag | providers | yes, once | 806 ms |
+
+Expiry also moved off the read path. Running it on every search made the pool
+shrink for someone who was only scrolling. The interface says which it got, so
+a saved list is labelled rather than passed off as current.
+
+**Practical tailoring advice, ordered by what it costs you.** Every piece of
+this existed and was scattered across three lists; the order was the missing
+part. Steps sort by cost rather than by score: `free` (the evidence is already
+on the page and only needs moving), `low` (rewrite a sentence, no new claim),
+`asks` (the system has to ask whether the experience is real first), `accept`
+(nothing can be done truthfully, said plainly). Telling someone to add
+Kubernetes when they have never used it is the failure this product exists to
+avoid, so those steps sort last and are phrased as interview preparation rather
+than editing.
+
+Advice is held to a tighter standard than scoring. The gap and highlight lists
+legitimately include stems like `languages` (which the taxonomy picks up from
+"natural language processing") and `systems` (from "distributed systems") &mdash;
+counting them is right, and "work languages into your Data Engineer bullet" is
+not advice. Only curated, unambiguous technology names reach a step.
+&rarr; `server/src/ai/tailoring.js`
 
 **Skill filters are curated, and must discriminate.** `skillOptions` offers the
 technologies a pool actually asks for, with how many postings want each — but
@@ -386,6 +454,43 @@ every analysis and are shown in the UI, so the scoring can be checked rather
 than believed.
 → `server/src/nlp/bm25.js`, `server/src/nlp/calibration.js`
 
+### Band thresholds, and a measured problem with them
+
+Bands were set with the advisor on 12 November: **80 and above strong, 60&ndash;80
+decent with gaps worth preparing for, 40&ndash;60 partial, below 40 weak.** A perfect
+100 stays reachable, because a resume that genuinely covers every requirement has
+earned it. Every band ships its own interpretation and an instruction, returned
+with the analysis as `scoreGuide()` so the legend and the thresholds cannot drift
+apart.
+
+`npm run calibrate -- --live 80` scores the reference resume against real stored
+postings rather than the purpose-written ladder. The two distributions are not
+close:
+
+```
+Against 80 real postings from the stored pool
+  min 0.0   median 9.8   p90 25.8   max 42.1
+
+  80 and above  strong      0    0%
+  60-80         moderate    0    0%
+  40-60         weak        2    3%
+  0-40          poor       78   98%
+```
+
+The ladder's postings are short and purpose-written, so a resume covering the
+requirements scores near 90. Real postings run past 150 terms, including a great
+deal of role and soft-skill vocabulary, and no resume covers most of them. The
+headline score measures coverage of a posting's whole recognized-skill space, so
+on real listings it sits in single digits &mdash; which means these thresholds
+report "weak match" for almost everything a user will actually see.
+
+**This is unresolved and needs a decision, not a rescale.** Moving the
+thresholds down to fit the data would make the bands meaningless; the honest fix
+is to score against the terms a posting actually leans on rather than every term
+it contains, since `importance` tiers are already computed per term in
+`keywordGap.js`. That changes the headline figure and every score the report
+cites, so it belongs in a conversation rather than a commit.
+
 ### Not applicable is not 100%
 
 A category a posting never mentions reports `null`, and the UI shows **N/A**.
@@ -458,8 +563,8 @@ mysql -u root -p -e "SELECT VERSION();"
 ## Testing
 
 ```bash
-npm test          # 152 unit tests, no database required
-npm run smoke     # 60 checks end-to-end against a running server + database
+npm test          # 182 unit tests, no database required
+npm run smoke     # 67 checks end-to-end against a running server + database
 ```
 
 The unit tests cover the NLP pipeline (stemming, tokenizing, TF-IDF, cosine,
@@ -470,6 +575,16 @@ a blocked request a dead job, and the honest-AI constraint. They need no databas
 key, and no network — provider responses are stubbed, and credentials are
 blanked inside the tests so a machine with real Adzuna keys and one without
 behave identically.
+
+`npm test` runs both workspaces. The 18 in `mobile/tests/` cover the two places
+where a mistake disconnects the app rather than degrading it: which address the
+API is looked for at, and the Leaflet document that runs inside the WebView on
+device. That document is a string inside a React component, so a bundler will
+ship it broken without complaint — the tests execute its script against a stub
+Leaflet and check that it parses, opens where it is told, keeps the attribution
+the OSM tile policy requires, and reports bounds, taps and a failed CDN load in
+the shape the app expects. They do not prove the map draws; only a device shows
+that.
 
 `npm run smoke` needs MySQL configured and the server running. It walks the
 full lifecycle: register → upload → analyze → suggest → track, and asserts the
@@ -501,6 +616,34 @@ behind an interface (`server/src/jobs/index.js`, `server/src/ai/provider.js`).
 Live job providers run concurrently and fail independently: one board being
 down thins the results rather than failing the request, and if every live
 source is unreachable the search falls back to the fixture set and says so.
+
+---
+
+## Running on a phone, and what a store build still needs
+
+Development on a device needs nothing installed: `npm run mobile`, then scan
+the QR code with Expo Go. `react-native-webview` is one of the libraries Expo
+Go already carries, so the map works there — no Xcode, no Android Studio, no
+custom dev client.
+
+A standalone build, the kind you upload to TestFlight or hand over as an APK,
+has three things still open. None of them affects development, and all three
+are recorded here rather than guessed at:
+
+- **No app icon or native splash.** `app.json` declares neither, so Expo's
+  defaults are used. Native splash screens are configured by the
+  `expo-splash-screen` plugin in SDK 57, which is not installed; the honey
+  background that used to sit at the top level of `app.json` was not valid
+  there and was being ignored, so it now sits under `web`, where it applies.
+  Supplying a 1024×1024 `icon.png` is the first step.
+- **Android blocks plain HTTP in a release build.** A standalone app has to
+  talk to an HTTPS API, which is what `EXPO_PUBLIC_API_URL` is for. Allowing
+  cleartext so a release build can reach a laptop on the LAN needs the
+  `expo-build-properties` plugin, and is worth avoiding.
+- **Six Expo packages are a patch version behind the SDK**
+  (`npx expo install --check` lists them). Left alone on purpose: all three
+  platforms bundle as they are, and bumping `expo-router` shortly before a
+  demo trades a working app for a tidy report.
 
 ---
 
@@ -541,6 +684,7 @@ server/
   tests/        unit tests + end-to-end smoke script
 mobile/
   app/          expo-router screens (auth, tabs, analysis detail)
-  src/          API client, theme, shared components, charts, Leaflet map,
-                auth state
+  src/          API client + API address resolution, theme, shared components,
+                charts, Leaflet map (DOM on web, WebView on device), auth state
+  tests/        API address rules, and the WebView map document
 ```

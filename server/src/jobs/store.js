@@ -106,6 +106,51 @@ export async function upsertPostings(jobs) {
 }
 
 /**
+ * Search the stored pool, without touching a job board.
+ *
+ * The default read path. Hitting three providers on every page load spends
+ * API quota on a user who is scrolling, and the pool already holds everything
+ * previous sweeps found — so a board is only asked when the user does
+ * something that means it: typing a query, choosing a field, or pressing
+ * refresh.
+ *
+ * Keyword matching is a LIKE across title, company and description. Crude
+ * next to the scoring pipeline, and the right tool here: this is narrowing a
+ * list the user is about to pick from, not ranking a resume against it.
+ *
+ * @param {object} args {query, location, limit}
+ */
+export async function searchStored({ query: text = '', location = '', limit = 50 } = {}) {
+  const where = ['expired_at IS NULL', 'unavailable_at IS NULL'];
+  const params = [];
+
+  if (text.trim()) {
+    // Every word has to appear somewhere in the posting, so "machine learning"
+    // does not match a posting that merely says "learning".
+    for (const word of text.trim().split(/\s+/).slice(0, 6)) {
+      where.push('(title LIKE ? OR company LIKE ? OR description LIKE ?)');
+      params.push(`%${word}%`, `%${word}%`, `%${word}%`);
+    }
+  }
+
+  if (location.trim()) {
+    where.push('location LIKE ?');
+    params.push(`%${location.trim()}%`);
+  }
+
+  return query(
+    `SELECT id, source, external_id, title, company, location, description,
+            salary_min, salary_max, url, latitude, longitude, geo_source,
+            posted_at, closes_at, first_seen_at, last_seen_at
+       FROM job_postings
+      WHERE ${where.join(' AND ')}
+      ORDER BY COALESCE(posted_at, first_seen_at) DESC
+      LIMIT ?`,
+    [...params, Number(limit)]
+  );
+}
+
+/**
  * Active postings with coordinates inside a bounding box.
  *
  * Reads the stored pool rather than calling a provider, because a map pan is

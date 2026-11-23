@@ -29,9 +29,11 @@ export function bandColor(band) {
 
 /** Colour for a raw 0-100 score, matching the API's band thresholds. */
 export function scoreColor(score) {
-  if (score >= 75) return colors.strong;
-  if (score >= 45) return colors.moderate;
-  if (score >= 25) return colors.weak;
+  // Thresholds match verdictFor() in server/src/nlp/analyze.js. If those move,
+  // these move with them, or a colour stops meaning what the band says.
+  if (score >= 80) return colors.strong;
+  if (score >= 60) return colors.moderate;
+  if (score >= 40) return colors.weak;
   return colors.poor;
 }
 

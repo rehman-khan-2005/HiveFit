@@ -4,8 +4,9 @@ import { Router } from 'express';
 import { query, execute, transaction } from '../db/pool.js';
 import { requireAuth } from '../middleware/auth.js';
 import { asyncRoute, badRequest, notFound } from '../middleware/error.js';
-import { analyzeResume } from '../nlp/analyze.js';
+import { analyzeResume, scoreGuide } from '../nlp/analyze.js';
 import { bulletsWithTargets } from '../nlp/bulletTargets.js';
+import { tailoringPlan } from '../ai/tailoring.js';
 import { backgroundCorpus } from '../jobs/index.js';
 import { intParam } from '../utils/validate.js';
 import { MAX_POSTINGS_PER_ANALYSIS } from '../config/limits.js';
@@ -128,6 +129,9 @@ analysisRouter.post('/', asyncRoute(async (req, res) => {
     resume: { id: resume.id, title: resume.title, ...payload.resume },
     results: payload.results,
     comparison: payload.comparison,
+    // What the ranges mean. Sent with the scores so the legend and the
+    // thresholds can never disagree.
+    scoreGuide: scoreGuide(),
   });
 }));
 
@@ -177,6 +181,15 @@ analysisRouter.get('/:id', asyncRoute(async (req, res) => {
     candidates: [...keywordGap, ...underhighlighted],
   });
 
+  // Ordered advice, assembled from the three lists above so the user does not
+  // have to work out which edit to make first.
+  const tailoring = tailoringPlan({
+    underhighlighted,
+    prioritizedGap: keywordGap,
+    bullets,
+    verdict: { band: null },
+  });
+
   const suggestions = await query(
     'SELECT id, original_text, suggested_text, status, prompt_question, accepted, created_at FROM suggestions WHERE ats_analysis_id = ? ORDER BY created_at',
     [id]
@@ -198,6 +211,7 @@ analysisRouter.get('/:id', asyncRoute(async (req, res) => {
       // Bullets carry their entry context and their own ranked target terms,
       // so Select-a-Bullet can show why each bullet differs.
       bullets,
+      tailoring,
       createdAt: row.created_at,
       resume: { id: row.resume_id, title: row.resume_title },
       job: {
@@ -212,5 +226,6 @@ analysisRouter.get('/:id', asyncRoute(async (req, res) => {
       },
     },
     suggestions,
+    scoreGuide: scoreGuide(),
   });
 }));

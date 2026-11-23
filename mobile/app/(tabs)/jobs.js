@@ -23,15 +23,22 @@ export default function JobsScreen() {
   const [pinned, setPinned] = useState(null);     // postings at a clicked pin
   const [coverage, setCoverage] = useState(null);
   const [truncated, setTruncated] = useState(false);
+  const [source, setSource] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [skillOptions, setSkillOptions] = useState([]);
+  const [skillFilter, setSkillFilter] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [savedIds, setSavedIds] = useState(new Set());
 
-  const search = useCallback(async (q = query, loc = location, f = field) => {
+  // `refresh` is passed only when the user did something that means it —
+  // pressing Search, choosing a field, or asking for fresh listings. Opening
+  // the tab reads the stored pool and costs no board request.
+  const search = useCallback(async (q = query, loc = location, f = field, refresh = false, sk = skillFilter) => {
     setError(null);
     try {
       const [result, saved] = await Promise.all([
-        api.searchJobs(q, loc, 50, f ?? undefined),
+        api.searchJobs(q, loc, 50, f ?? undefined, sk, refresh),
         api.listSavedJobs(),
       ]);
       setJobs(result.jobs);
@@ -41,13 +48,15 @@ export default function JobsScreen() {
       setFields(result.fields ?? []);
       setFieldCounts(result.fieldCounts ?? []);
       setCoverage(result.coverage ?? null);
+      setSource(result.source ?? null);
+      setSkillOptions(result.skillOptions ?? []);
       setSavedIds(new Set(saved.savedJobs.map((s) => s.job_posting_id)));
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [query, location, field]);
+  }, [query, location, field, skillFilter]);
 
   useFocusEffect(useCallback(() => { search(); }, []));
 
@@ -58,7 +67,7 @@ export default function JobsScreen() {
    */
   const loadBounds = useCallback(async (bbox) => {
     try {
-      const result = await api.jobsInBounds(bbox, field ?? undefined, []);
+      const result = await api.jobsInBounds(bbox, field ?? undefined, skillFilter);
       setMapJobs(result.jobs ?? []);
       setCoverage(result.coverage ?? null);
       setTruncated(Boolean(result.truncated));
@@ -66,7 +75,7 @@ export default function JobsScreen() {
     } catch (err) {
       setError(err.message);
     }
-  }, [field]);
+  }, [field, skillFilter]);
 
   async function save(job) {
     try {
@@ -113,7 +122,7 @@ export default function JobsScreen() {
             <Chip
               label="All fields"
               selected={!field}
-              onPress={() => { setField(null); setLoading(true); search(query, location, null); }}
+              onPress={() => { setField(null); setLoading(true); search(query, location, null, true); }}
             />
             {fields.map((f) => {
               const count = fieldCounts.find((c) => c.id === f.id)?.count ?? 0;
@@ -122,13 +131,67 @@ export default function JobsScreen() {
                   key={f.id}
                   label={count > 0 ? `${f.label} (${count})` : f.label}
                   selected={field === f.id}
-                  onPress={() => { setField(f.id); setLoading(true); search(query, location, f.id); }}
+                  onPress={() => { setField(f.id); setLoading(true); search(query, location, f.id, true); }}
                 />
               );
             })}
           </View>
 
-          <Button title="Search" onPress={() => search()} style={{ marginTop: spacing.sm }} />
+          {skillOptions.length > 0 ? (
+            <>
+              <Text style={[type.small, { marginTop: spacing.xs, marginBottom: 2 }]}>
+                Must mention{skillFilter.length > 0 ? ` (${skillFilter.length} selected)` : ''}
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                {skillOptions.slice(0, 12).map((skill) => {
+                  const on = skillFilter.includes(skill.term);
+                  const next = on
+                    ? skillFilter.filter((t) => t !== skill.term)
+                    : [...skillFilter, skill.term];
+                  return (
+                    <Chip
+                      key={skill.stem}
+                      label={`${skill.term} (${skill.postings})`}
+                      selected={on}
+                      onPress={() => { setSkillFilter(next); setLoading(true); search(query, location, field, false, next); }}
+                    />
+                  );
+                })}
+                {skillFilter.length > 0 ? (
+                  <Chip
+                    label="Clear skills ✕"
+                    tone="important"
+                    onPress={() => { setSkillFilter([]); setLoading(true); search(query, location, field, false, []); }}
+                  />
+                ) : null}
+              </View>
+            </>
+          ) : null}
+
+          <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+            <Button title="Search" onPress={() => search(query, location, field, true)} style={{ flex: 1 }} />
+            <Button
+              title={refreshing ? 'Checking boards…' : 'Refresh listings'}
+              variant="ghost"
+              loading={refreshing}
+              onPress={async () => {
+                setRefreshing(true);
+                await search(query, location, field, true);
+                setRefreshing(false);
+              }}
+              style={{ flex: 1 }}
+            />
+          </View>
+
+          {/* Saying where the list came from is the honest version of a stale
+              list: the alternative is asking three boards on every page load. */}
+          {source ? (
+            <Text style={[type.small, { marginTop: spacing.xs }]}>
+              {source === 'providers'
+                ? 'Just fetched from the job boards.'
+                : 'Showing saved listings. Refresh to pull new roles and drop closed ones.'}
+            </Text>
+          ) : null}
         </Card>
 
         <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm }}>
@@ -160,8 +223,13 @@ export default function JobsScreen() {
 
             <Text style={[type.small, { marginTop: spacing.xs }]}>
               {mapJobs.length} listing{mapJobs.length === 1 ? '' : 's'} in view
-              {field ? ` · ${fields.find((f) => f.id === field)?.label ?? field}` : ''}
+              {field ? ` · ${fields.find((f) => f.id === field)?.label ?? field}` : ' · all fields'}
+              {skillFilter.length > 0 ? ` · ${skillFilter.join(', ')}` : ''}
               {' · remote roles have no pin and stay in the list'}
+            </Text>
+            <Text style={[type.small, { marginTop: 2 }]}>
+              Pins use the location each listing states, so a city-only posting sits at
+              that city's centre rather than at the employer's door.
             </Text>
 
             {truncated ? (

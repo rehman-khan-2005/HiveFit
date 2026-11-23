@@ -35,10 +35,12 @@ export default function AnalyzeScreen() {
   // in the loaded pool — otherwise "6 selected" is unreviewable.
   const [selectedMeta, setSelectedMeta] = useState({});
 
-  const loadJobs = useCallback(async (nextField, nextSkills = []) => {
+  const loadJobs = useCallback(async (nextField, nextSkills = [], refresh = false) => {
     // Ask for the maximum the API will serve; the picker below is built to
     // stay usable at that size, and a short list is the thing users notice.
-    const j = await api.searchJobs('', '', 50, nextField ?? undefined, nextSkills);
+    // refresh only when the user changed a filter; the first load reads the
+    // stored pool and costs no board request.
+    const j = await api.searchJobs('', '', 50, nextField ?? undefined, nextSkills, refresh);
     setJobs(j.jobs);
     setPool({
       provider: j.provider,
@@ -74,7 +76,7 @@ export default function AnalyzeScreen() {
     setError(null);
     setBusy(true);
     try {
-      await loadJobs(nextField, nextSkills);
+      await loadJobs(nextField, nextSkills, true);
     } catch (err) {
       setError(err.message);
     } finally {

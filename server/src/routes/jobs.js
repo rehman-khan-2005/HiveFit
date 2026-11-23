@@ -11,7 +11,7 @@ import { MAX_POSTINGS_PER_ANALYSIS } from '../config/limits.js';
 import { filterBySkills, filterByLocation, skillsInPool } from '../jobs/filters.js';
 import {
   upsertPostings, expireStale, freshnessSummary, unavailableIds,
-  postingsInBounds, geoCoverage,
+  postingsInBounds, geoCoverage, searchStored,
 } from '../jobs/store.js';
 import { intParam, optionalString } from '../utils/validate.js';
 
@@ -52,16 +52,20 @@ const REMOTE_REQUEST = /\b(remote|work from home|wfh|telecommute)\b/i;
  * Results are persisted to job_postings so an analysis can reference them by
  * id, and so a saved job survives the search that found it.
  *
- * Every search is also a sighting: postings returned here have their
- * last_seen_at bumped, which is what keeps them out of the expiry sweep. A
- * pool refreshed only by searching drifts towards whatever the user searches
- * for, so `npm run jobs:refresh` exists to sweep the roles nobody looked at.
+ * Reads the stored pool by default and only calls a job board when the user
+ * has done something that means it. Asking three providers on every page load
+ * spends API quota on someone who is scrolling, and the pool already holds
+ * what previous sweeps found.
  *
- * Results are then filtered against what we know is dead. This matters more
- * than it sounds: the response is the provider's answer, not a database read,
- * so without this step a board that keeps serving a listing whose page has
- * already 404'd keeps putting it in front of the user no matter how many
- * times the pool has been refreshed.
+ *   refresh absent   serve the pool; call the boards only if it comes back too
+ *                    thin to be useful, which is what makes a first run work
+ *   refresh=1        the user typed a query, chose a field or pressed refresh
+ *   refresh=0        never call a board, however thin the pool
+ *
+ * When a board is called, its results are filtered against what we already
+ * know is dead — a board will keep serving a listing whose page has already
+ * 404'd, and without that step it reaches the user however many times the pool
+ * has been refreshed.
  */
 jobRouter.get('/search', asyncRoute(async (req, res) => {
   const search = optionalString(req.query.query, 'query', 200) ?? '';
@@ -87,19 +91,41 @@ jobRouter.get('/search', asyncRoute(async (req, res) => {
   // rather than leaving the filter to sieve a pool that holds nothing matching.
   const effectiveQuery = search || (field ? fieldQuery(field) : '');
 
-  const { provider, providers, jobs, live, degraded } = await searchJobs({
-    query: effectiveQuery, location, limit: fetchLimit,
-  });
+  const wants = req.query.refresh;
+  const forced = wants === '1' || wants === 'true';
+  const forbidden = wants === '0' || wants === 'false';
 
-  const { jobs: persisted, added, refreshed } = await upsertPostings(jobs);
+  // Enough of a pool to be worth showing. Below this a first run, or a field
+  // nobody has swept yet, would hand back an almost empty list.
+  const THIN = 8;
 
-  // One indexed UPDATE, on the read path on purpose: it is what makes the pool
-  // shrink as well as grow for someone who only ever opens the app, never the
-  // refresh script.
-  if (live) await expireStale();
+  let stored = await searchStored({ query: effectiveQuery, location, limit: fetchLimit });
+  let providers = [];
+  let provider = 'pool';
+  let live = false;
+  let degraded = false;
+  let added = 0;
+  let refreshed = 0;
+  let hitProviders = false;
 
-  const hidden = await unavailableIds(persisted.map((job) => job.id));
-  const available = persisted.filter((job) => !hidden.has(job.id));
+  if (!forbidden && (forced || stored.length < THIN)) {
+    hitProviders = true;
+    const result = await searchJobs({ query: effectiveQuery, location, limit: fetchLimit });
+    ({ provider, providers, live, degraded } = result);
+
+    const upserted = await upsertPostings(result.jobs);
+    added = upserted.added;
+    refreshed = upserted.refreshed;
+
+    // Only on a refresh. Expiring on every read made the pool shrink for
+    // someone who was only scrolling.
+    if (live) await expireStale();
+
+    stored = await searchStored({ query: effectiveQuery, location, limit: fetchLimit });
+  }
+
+  const hidden = await unavailableIds(stored.map((job) => job.id));
+  const available = stored.filter((job) => !hidden.has(job.id));
 
   // Field and role are derived, not stored: they are view concerns, and a
   // stored copy would go stale the moment the patterns are tuned.
@@ -130,6 +156,10 @@ jobRouter.get('/search', asyncRoute(async (req, res) => {
     providers,
     live,
     degraded,
+    // Whether this response cost a board request, so the interface can offer
+    // a refresh instead of pretending the list is always current.
+    fromProviders: hitProviders,
+    source: hitProviders ? 'providers' : 'pool',
     count: Math.min(matching.length, limit),
     added,
     refreshed,

@@ -8,10 +8,22 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
+import { resolveApiBase } from './apiBase';
+
 const TOKEN_KEY = 'hivefit.token';
 
-export const API_BASE =
-  Constants.expoConfig?.extra?.apiBaseUrl ?? 'http://localhost:4000/api';
+export const API_BASE = resolveApiBase({
+  override: process.env.EXPO_PUBLIC_API_URL,
+  configured: Constants.expoConfig?.extra?.apiBaseUrl,
+  platform: Platform.OS,
+  // Whichever of these Expo has filled in. They all point at the machine
+  // serving the bundle; the shapes differ by SDK version and launch method.
+  hostCandidates: [
+    Constants.expoConfig?.hostUri,
+    Constants.expoGoConfig?.debuggerHost,
+    Constants.linkingUri,
+  ],
+});
 
 const webStore = {
   getItem: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -60,10 +72,15 @@ async function request(path, { method = 'GET', body, auth = true, isForm = false
     });
   } catch (err) {
     // A fetch rejection here is nearly always the API not running, or a
-    // device pointing at localhost instead of the host machine's LAN address.
+    // device that cannot route to it. On a phone the second case is the common
+    // one, so say which address was tried and how to change it.
+    const hint = Platform.OS === 'web'
+      ? 'Is the server running? Try `npm run dev`.'
+      : `Is the server running, and is this device on the same network? `
+        + `Set EXPO_PUBLIC_API_URL to point somewhere else.`;
     throw new ApiError(
       0,
-      `Cannot reach the HiveFit API at ${API_BASE}. Is the server running?`,
+      `Cannot reach the HiveFit API at ${API_BASE}. ${hint}`,
       err.message
     );
   }
@@ -103,12 +120,15 @@ export const api = {
   decideSuggestion: (id, accepted) => request(`/suggestions/${id}`, { method: 'PATCH', body: { accepted } }),
 
   // 4.0 Job search
-  searchJobs: (query, location, limit, field, skills) =>
+  // `refresh` true calls the job boards; left off, the stored pool answers and
+  // the boards are only asked when the pool is too thin to be useful.
+  searchJobs: (query, location, limit, field, skills, refresh) =>
     request(`/jobs/search?query=${encodeURIComponent(query ?? '')}`
       + `&location=${encodeURIComponent(location ?? '')}`
       + (limit ? `&limit=${Number(limit)}` : '')
       + (field ? `&field=${encodeURIComponent(field)}` : '')
-      + (skills?.length ? `&skills=${encodeURIComponent(skills.join(','))}` : '')),
+      + (skills?.length ? `&skills=${encodeURIComponent(skills.join(','))}` : '')
+      + (refresh ? '&refresh=1' : '')),
   // How the pool has moved lately, without running a search to find out.
   jobFreshness: () => request('/jobs/freshness'),
   // Postings inside a map viewport. bbox is Leaflet's "minLng,minLat,maxLng,maxLat".

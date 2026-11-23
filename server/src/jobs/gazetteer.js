@@ -19,7 +19,12 @@
 // stripped, so "New York, NY" and "new-york ny" both land here.
 const CITIES = {
   // --- United States, by metro size ---
-  'new york': [40.7128, -74.0060], 'brooklyn': [40.6782, -73.9442],
+  // Midtown, not City Hall. A listing that says only "New York, NY" has given
+  // us a city, and the honest pin for a city is its business district — where
+  // the jobs actually are. Researching each employer's office address is out
+  // of scope and would be guesswork dressed as precision.
+  'new york': [40.7549, -73.9840], 'manhattan': [40.7549, -73.9840],
+  'brooklyn': [40.6782, -73.9442],
   'los angeles': [34.0522, -118.2437], 'chicago': [41.8781, -87.6298],
   'houston': [29.7604, -95.3698], 'phoenix': [33.4484, -112.0740],
   'philadelphia': [39.9526, -75.1652], 'san antonio': [29.4241, -98.4936],

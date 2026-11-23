@@ -151,7 +151,17 @@ async function main() {
   const badField = await call('/jobs/search?field=nonsense');
   check('an unknown field is rejected rather than silently ignored', badField.status === 400);
 
-  const repeat = await call('/jobs/search?query=&limit=6');
+  // Reading the pool must not cost a board request; only intent does.
+  const pooled = await call('/jobs/search?query=&limit=6&refresh=0');
+  check('a plain search is served from the stored pool',
+    pooled.data?.source === 'pool' && pooled.data?.fromProviders === false,
+    `source ${pooled.data?.source}, fromProviders ${pooled.data?.fromProviders}`);
+
+  const forced = await call('/jobs/search?query=&limit=6&refresh=1');
+  check('refresh=1 calls the job boards',
+    forced.data?.fromProviders === true, `fromProviders ${forced.data?.fromProviders}`);
+
+  const repeat = await call('/jobs/search?query=&limit=6&refresh=1');
   check('a repeated search re-sees rather than duplicates postings',
     repeat.data?.added === 0 && repeat.data?.refreshed > 0,
     `added ${repeat.data?.added}, refreshed ${repeat.data?.refreshed}`);
@@ -177,6 +187,14 @@ async function main() {
     return Math.abs(total - 100) < 1;
   }));
   check('comparison summary present', Boolean(analysis.data?.comparison?.interpretation));
+
+  // Score interpretation, asked for at the 12 November meeting.
+  const guide = analysis.data?.scoreGuide ?? [];
+  check('the analysis ships a score guide', guide.length === 4 && guide[0].floor === 80,
+    `${guide.length} bands, top floor ${guide[0]?.floor}`);
+  check('every band says what to do about it', guide.every((g) => g.guidance?.length > 20));
+  check('verdicts carry guidance alongside the band',
+    results.every((r) => r.verdict?.band && r.verdict?.guidance));
 
   // Ranking — postings come back best match first.
   const scores = results.map((r) => r.score);
@@ -207,6 +225,13 @@ async function main() {
   check('the analysis detail carries the posting link',
     Boolean(reloaded.data?.analysis?.job?.url),
     JSON.stringify(reloaded.data?.analysis?.job ?? {}));
+  const plan = reloaded.data?.analysis?.tailoring;
+  check('the analysis returns an ordered tailoring plan',
+    Boolean(plan?.summary) && Array.isArray(plan?.steps),
+    JSON.stringify(plan ?? {}).slice(0, 110));
+  check('no tailoring step tells the user to claim something unevidenced',
+    (plan?.steps ?? []).every((s) => s.effort !== 'asks' || /if you have|nothing is added/i.test(s.why)));
+
   check('buried skills persist with the analysis',
     Array.isArray(reloaded.data?.analysis?.underhighlighted),
     JSON.stringify(reloaded.data?.analysis ?? {}).slice(0, 120));

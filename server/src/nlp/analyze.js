@@ -14,14 +14,65 @@ import { analyzeKeywordGap } from './keywordGap.js';
 import { findUnderhighlighted, summarizeUnderhighlighted } from './highlight.js';
 import { parseResume } from './parse.js';
 
-// Bands calibrated against reference pairs (see tests/scoring.test.js): a
-// resume scored against a posting rewritten from it lands ~90, a genuine but
-// imperfect match ~46, an adjacent role ~26, an unrelated field 0.
+// Band thresholds, set with the advisor on 12 November: 80 and above is a
+// strong match, 60 to 80 is decent with gaps worth preparing for. A perfect
+// 100 stays reachable — a resume that genuinely covers every requirement has
+// earned it — but it should be rare, and the bands are placed so that "strong"
+// means strong rather than merely above average.
+//
+// Calibrated against the reference pairs in tests/scoring.test.js: a posting
+// rewritten from the resume lands ~90, the same field with gaps ~50, an
+// adjacent role ~25, an unrelated field 0.
+const BANDS = [
+  {
+    floor: 80,
+    band: 'strong',
+    message: 'Strong match. Your resume already covers most of what this posting asks for.',
+    guidance: 'Worth applying to as it stands. Read the gaps below for interview preparation rather than rewriting.',
+  },
+  {
+    floor: 60,
+    band: 'moderate',
+    message: 'Decent match. You cover the core requirements, with gaps worth reviewing before you apply.',
+    guidance: 'Apply, but tailor first. Work the terms below into your bullets and be ready to talk about what is missing.',
+  },
+  {
+    floor: 40,
+    band: 'weak',
+    message: 'Partial match. You share real ground with this posting, but several required skills are missing.',
+    guidance: 'Tailoring will help and will not close it alone. Check the gaps for what you could honestly add.',
+  },
+  {
+    floor: 0,
+    band: 'poor',
+    message: 'Weak match. This posting asks for substantially different experience than your resume shows.',
+    guidance: 'Your time is better spent on the stronger matches in this comparison.',
+  },
+];
+
 function verdictFor(score) {
-  if (score >= 75) return { band: 'strong', message: 'Strong match. Your resume already covers most of what this posting asks for.' };
-  if (score >= 45) return { band: 'moderate', message: 'Moderate match. You cover the core requirements; the gaps below are what stand between you and a strong match.' };
-  if (score >= 25) return { band: 'weak', message: 'Weak match. You share some ground with this posting, but several required skills are missing.' };
-  return { band: 'poor', message: 'Poor match. This posting asks for substantially different experience than your resume shows.' };
+  const { band, message, guidance } = BANDS.find((tier) => score >= tier.floor);
+  return { band, message, guidance };
+}
+
+/**
+ * What the score ranges mean, returned with every analysis.
+ *
+ * Shipped as data rather than written into the interface so one definition
+ * drives the bands, the colours and the explanation the user reads — a legend
+ * that drifts from the thresholds is worse than no legend.
+ */
+export function scoreGuide() {
+  return BANDS.map((tier, index) => ({
+    band: tier.band,
+    floor: tier.floor,
+    ceiling: index === 0 ? 100 : BANDS[index - 1].floor,
+    label: index === 0
+      ? `${tier.floor} and above`
+      : `${tier.floor}\u2013${BANDS[index - 1].floor}`,
+    message: tier.message,
+    guidance: tier.guidance,
+  }));
 }
 
 /**

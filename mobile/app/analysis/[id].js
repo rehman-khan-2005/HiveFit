@@ -7,7 +7,7 @@ import {
   Card, Button, Field, Banner, Loading, ScoreBadge, Chip, ApplyLink,
 } from '../../src/components/ui';
 import { CategoryCoverage } from '../../src/components/charts';
-import { colors, spacing, type } from '../../src/theme';
+import { colors, spacing, type, scoreColor } from '../../src/theme';
 
 export default function AnalysisDetail() {
   const { id } = useLocalSearchParams();
@@ -96,6 +96,8 @@ export default function AnalysisDetail() {
     (suggestion?.evidence?.fromEntry?.length ?? 0) === 0;
 
   const { analysis } = data;
+  const guide = data.scoreGuide ?? [];
+  const plan = analysis.tailoring ?? null;
   const gap = analysis.keywordGap ?? [];
   const buried = analysis.underhighlighted ?? [];
 
@@ -145,6 +147,45 @@ export default function AnalysisDetail() {
           label={analysis.job.expiredAt ? 'Open the original posting' : 'Apply to this job'}
           style={{ marginTop: spacing.md }}
         />
+
+        {/* What the number means. Without this a 61 and an 81 read the same. */}
+        {guide.length > 0 ? (
+          <View style={{ marginTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.line, paddingTop: spacing.sm }}>
+            <Text style={type.h3}>What this score means</Text>
+            {guide.map((tier) => {
+              const here = analysis.score >= tier.floor
+                && (tier.ceiling >= 100 || analysis.score < tier.ceiling);
+              return (
+                <View
+                  key={tier.band}
+                  style={{
+                    flexDirection: 'row',
+                    gap: spacing.sm,
+                    marginTop: spacing.xs,
+                    paddingLeft: spacing.sm,
+                    borderLeftWidth: 3,
+                    borderLeftColor: here ? scoreColor(tier.floor === 0 ? 0 : tier.floor) : colors.line,
+                  }}
+                >
+                  <Text style={[type.mono, {
+                    fontSize: 12, width: 56,
+                    fontWeight: here ? '700' : '400',
+                    color: here ? colors.ink : colors.muted,
+                  }]}>
+                    {tier.label}
+                  </Text>
+                  <Text style={[type.small, {
+                    flex: 1,
+                    color: here ? colors.ink : colors.muted,
+                    fontWeight: here ? '600' : '400',
+                  }]}>
+                    {here ? tier.guidance : tier.message.split('.')[0]}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
       </Card>
 
       {/* Transparent scoring — the differentiator against a bare percentage. */}
@@ -174,6 +215,45 @@ export default function AnalysisDetail() {
           </View>
         ) : null}
       </Card>
+
+      {/* Ordered advice: cheapest, safest edits first. The three lists this is
+          assembled from each tell you something true; the order is the part
+          the user cannot work out for themselves. */}
+      {plan?.steps?.length ? (
+        <Card>
+          <Text style={type.h2}>How to tailor this resume</Text>
+          <Text style={[type.body, { fontSize: 14, marginTop: spacing.xs, marginBottom: spacing.md }]}>
+            {plan.summary}
+          </Text>
+
+          {plan.steps.map((step, i) => (
+            <View
+              key={`${step.kind}-${i}`}
+              style={{
+                borderWidth: 1,
+                borderColor: step.effort === 'free' ? '#A5D6A7' : colors.line,
+                backgroundColor: step.effort === 'free' ? '#E8F5E9' : colors.surface,
+                borderRadius: 10,
+                padding: spacing.md,
+                marginBottom: spacing.xs,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                <Text style={[type.mono, { fontSize: 11, color: colors.muted }]}>{i + 1}</Text>
+                <Text style={[type.h3, { flex: 1 }]}>{step.title}</Text>
+                {step.effort === 'free' ? <Chip label="no new claim" tone="success" /> : null}
+                {step.effort === 'asks' ? <Chip label="asks you first" tone="important" /> : null}
+              </View>
+              <Text style={[type.small, { marginTop: spacing.xs }]}>{step.why}</Text>
+              {step.bullet ? (
+                <Text style={[type.body, { fontSize: 13, marginTop: spacing.xs, fontStyle: 'italic' }]}>
+                  “{step.bullet}”
+                </Text>
+              ) : null}
+            </View>
+          ))}
+        </Card>
+      ) : null}
 
       {/* Skills the resume has but does not demonstrate. Deliberately separate
           from the gap list below: nothing here needs the user to claim
